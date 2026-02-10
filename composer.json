@@ -21,10 +21,10 @@
         "attributes",
         "discovery"
     ],
-    "homepage": "https://github.com/studiometa/foehn-framework",
+    "homepage": "https://github.com/studiometa/foehn",
     "support": {
         "issues": "https://github.com/studiometa/foehn-framework/issues",
-        "source": "https://github.com/studiometa/foehn-framework"
+        "source": "https://github.com/studiometa/foehn"
     },
     "require": {
         "php": "^8.4",
