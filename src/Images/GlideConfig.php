@@ -63,7 +63,55 @@ final class GlideConfig
             // A response is built by the route, which needs the path rather than a
             // stream: it hands the file to the webserver and lets it do the rest.
             'base_url' => '/' . GlideTransformer::ROUTE,
+            // A closure literal, and neither `$this->cachePath(...)` nor a static
+            // closure. Glide rebinds this callable onto the Server, and
+            // `Closure::bind()` hands back null for both of those — a closure made
+            // from a method cannot move to another class, and a static one cannot
+            // be given a `$this` at all. Glide turns the null into "Invalid cache
+            // path callable", so every image 404s while the unit suite stays green.
+            //
+            // @mago-expect lint:prefer-static-closure
+            // @mago-expect lint:prefer-arrow-function
+            'cache_path_callable' => function (string $path, array $params): string {
+                return GlideConfig::cachePath($path, $params);
+            },
         ]);
+    }
+
+    /**
+     * Where a result is cached: the source path, then the URL's own signature.
+     *
+     * Glide keys a result under `xxh3(path + params)` by default, which is
+     * deterministic but not *reproducible by a webserver* — nginx cannot hash. So
+     * every cache hit would still boot WordPress to work out which file to send,
+     * and the caching would save the transform while paying for the boot.
+     *
+     * The signature is already a keyed hash over exactly the path and the
+     * parameters, and it is already in the query string. Keying on it makes the
+     * cache path something a webserver can assemble from the request alone:
+     *
+     *     /_image/2016/06/photo.jpg?w=400&s=<sig>  →  <cache>/2016/06/photo.jpg/<sig>
+     *
+     * A forged `s` cannot reach a file: nothing is ever written under a signature
+     * the site did not produce, so a wrong one misses and falls through to PHP,
+     * where the signature is checked and refused.
+     *
+     * @param array<string, mixed> $params
+     */
+    public static function cachePath(string $path, array $params): string
+    {
+        $signature = (string) ($params['s'] ?? '');
+
+        if (preg_match('/^[a-f0-9]{32}$/', $signature) !== 1) {
+            // Nothing to key on. `GlideRoute` validates a signature before it ever
+            // gets here, so this is a direct call to the server — hash the
+            // parameters instead, the way Glide would have.
+            unset($params['s'], $params['p']);
+            ksort($params);
+            $signature = md5(http_build_query($params));
+        }
+
+        return $path . '/' . $signature;
     }
 
     /**
@@ -160,12 +208,26 @@ final class GlideConfig
     /**
      * A client for the same bucket `s3-uploads` writes to.
      *
-     * Flysystem needs an S3 client; the plugin uses a stream wrapper. Both sit on
-     * `aws/aws-sdk-php`, so this adds configuration rather than a second SDK — and
-     * it reads the configuration the installer already wrote.
+     * Its own, rather than a second one built from constants. The bucket and the
+     * region are constants, but everything that makes a non-AWS bucket reachable
+     * is not: the plugin takes its endpoint, its path-style addressing and its
+     * checksum settings from the `s3_uploads_s3_client_params` filter, which is
+     * where Føhn's own `S3UploadsEndpoint` supplies them, and where a site adds
+     * whatever R2 or Scaleway needs.
+     *
+     * Reading only the constants produced a client pointed at AWS while the
+     * uploads went to MinIO — and the symptom was every transform 404ing with the
+     * originals plainly present in the media library.
      */
     private function s3(): S3Client
     {
+        // `class_exists` and not a `use`: the plugin is a dependency of the site,
+        // never of the framework.
+        if (class_exists('S3_Uploads\Plugin')) {
+            /** @var S3Client */
+            return call_user_func(['S3_Uploads\Plugin', 'get_instance'])->s3();
+        }
+
         $config = [
             'version' => 'latest',
             'region' => defined('S3_UPLOADS_REGION') ? (string) constant('S3_UPLOADS_REGION') : 'us-east-1',
@@ -183,6 +245,13 @@ final class GlideConfig
         if (defined('S3_UPLOADS_ENDPOINT') && (string) constant('S3_UPLOADS_ENDPOINT') !== '') {
             $config['endpoint'] = (string) constant('S3_UPLOADS_ENDPOINT');
             $config['use_path_style_endpoint'] = true;
+        }
+
+        // The plugin's own extension point, applied to the client Glide will use,
+        // so one filter configures both.
+        if (function_exists('apply_filters')) {
+            /** @var array<string, mixed> $config */
+            $config = apply_filters('s3_uploads_s3_client_params', $config);
         }
 
         return new S3Client($config);
