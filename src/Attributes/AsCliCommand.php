@@ -9,8 +9,10 @@ use Attribute;
 /**
  * Register a class as a WP-CLI command.
  *
- * Commands are registered under the 'foehn' namespace:
- * `wp foehn <name>`
+ * A command of the project is registered as `wp app <name>`, or under the name
+ * FoehnConfig::$cliNamespace gives. A command of Foehn is registered as
+ * `wp foehn <name>`, and a command of another package under the namespace of that
+ * package: `wp foehn-acf <name>` for studiometa/foehn-acf.
  */
 #[Attribute(Attribute::TARGET_CLASS)]
 final readonly class AsCliCommand
@@ -19,10 +21,14 @@ final readonly class AsCliCommand
      * @param string $name Command name (e.g., 'make:post-type')
      * @param string $description Short description for help
      * @param string|null $longDescription Long description with examples (docblock format)
+     * @param bool $writes Whether the command changes content or files. Such a command refuses to run
+     *                     in the production environment unless `--force` or `--dry-run` is given, so its
+     *                     long description must declare `[--force]`; see ProductionGuard.
      */
     public function __construct(
         public string $name,
         public string $description,
         public ?string $longDescription = null,
+        public bool $writes = false,
     ) {}
 }

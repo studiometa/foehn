@@ -5,11 +5,12 @@ declare(strict_types=1);
 namespace Studiometa\Foehn\Console\Commands;
 
 use Studiometa\Foehn\Attributes\AsCliCommand;
-use Studiometa\Foehn\Console\ClassFileGenerator;
 use Studiometa\Foehn\Console\CliCommandInterface;
 use Studiometa\Foehn\Console\GenerationRequest;
+use Studiometa\Foehn\Console\Scaffolder;
 use Studiometa\Foehn\Console\Stubs\TaxonomyStub;
 use Studiometa\Foehn\Console\WpCli;
+use Studiometa\Foehn\Discovery\TaxonomyDiscovery;
 
 use function Tempest\Support\str;
 
@@ -35,10 +36,13 @@ use function Tempest\Support\str;
     : Make the taxonomy hierarchical (like categories)
 
     [--force]
-    : Overwrite existing file
+    : Overwrite an existing file. Also lets the command run in the production environment
 
     [--dry-run]
-    : Show what would be created without creating
+    : Write nothing. Show the file that would be written, or report that it exists
+
+    [--format=<format>]
+    : Output format. text (default) or json. json prints the written files, their status and the next steps
 
     ## EXAMPLES
 
@@ -53,12 +57,12 @@ use function Tempest\Support\str;
 
         # Preview what would be created
         wp foehn make:taxonomy genre --dry-run
-    DOC)]
+    DOC, writes: true)]
 final class MakeTaxonomyCommand implements CliCommandInterface
 {
     public function __construct(
         private readonly WpCli $cli,
-        private readonly ClassFileGenerator $generator,
+        private readonly Scaffolder $scaffolder,
     ) {}
 
     public function __invoke(array $args, array $assocArgs): void
@@ -78,34 +82,23 @@ final class MakeTaxonomyCommand implements CliCommandInterface
             ? array_map('trim', explode(',', $assocArgs['post-types']))
             : ['post'];
         $hierarchical = ($assocArgs['hierarchical'] ?? null) !== null;
-        $force = ($assocArgs['force'] ?? null) !== null;
-        $dryRun = ($assocArgs['dry-run'] ?? null) !== null;
 
-        $file = $this->generator->generate(new GenerationRequest(
-            stub: TaxonomyStub::class,
-            subdirectory: 'Taxonomies',
-            className: $className,
-            attributeArguments: [
-                'name' => $name,
-                'postTypes' => $postTypes,
-                'singular' => $singular,
-                'plural' => $plural,
-                'hierarchical' => $hierarchical,
-            ],
-        ));
-
-        if ($dryRun) {
-            $this->cli->previewGeneratedFile($file);
-
-            return;
-        }
-
-        if (!$this->generator->write($file, $force)) {
-            $this->cli->reportFileExists($file);
-
-            return;
-        }
-
-        $this->cli->success("Taxonomy created: {$this->cli->getRelativePath($file->path)}");
+        $this->scaffolder->scaffold(
+            new GenerationRequest(
+                stub: TaxonomyStub::class,
+                discovery: TaxonomyDiscovery::class,
+                subdirectory: 'Taxonomies',
+                className: $className,
+                attributeArguments: [
+                    'name' => $name,
+                    'postTypes' => $postTypes,
+                    'singular' => $singular,
+                    'plural' => $plural,
+                    'hierarchical' => $hierarchical,
+                ],
+            ),
+            $assocArgs,
+            'Taxonomy created',
+        );
     }
 }

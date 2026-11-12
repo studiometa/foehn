@@ -21,6 +21,7 @@ use Studiometa\Foehn\Console\Commands\MakeMenuCommand;
 use Studiometa\Foehn\Console\Commands\MakeModelCommand;
 use Studiometa\Foehn\Console\Commands\MakePatternCommand;
 use Studiometa\Foehn\Console\Commands\MakePostTypeCommand;
+use Studiometa\Foehn\Console\Commands\MakeSeederCommand;
 use Studiometa\Foehn\Console\Commands\MakeShortcodeCommand;
 use Studiometa\Foehn\Console\Commands\MakeTaxonomyCommand;
 use Studiometa\Foehn\Console\Commands\PageCacheClearCommand;
@@ -28,6 +29,10 @@ use Studiometa\Foehn\Console\Commands\PageCacheConfigCommand;
 use Studiometa\Foehn\Console\Commands\PageCacheStatusCommand;
 use Studiometa\Foehn\Console\Commands\PageCacheWarmCommand;
 use Studiometa\Foehn\Console\Commands\RewriteFlushCommand;
+use Studiometa\Foehn\DatabaseExport\DbExportCommand;
+use Studiometa\Foehn\DebugLog\LogCommand;
+use Studiometa\Foehn\Errors\ErrorsCommand;
+use Studiometa\Foehn\Trace\TraceCommand;
 use Studiometa\Foehn\Verification\VerifyCommand;
 
 describe('Commands', function (): void {
@@ -47,6 +52,7 @@ describe('Commands', function (): void {
         'MakeContextCommand' => ['class' => MakeContextCommand::class, 'name' => 'make:context'],
         'MakeMenuCommand' => ['class' => MakeMenuCommand::class, 'name' => 'make:menu'],
         'MakeImageSizeCommand' => ['class' => MakeImageSizeCommand::class, 'name' => 'make:image-size'],
+        'MakeSeederCommand' => ['class' => MakeSeederCommand::class, 'name' => 'make:seeder'],
         'DiscoveryClearCommand' => ['class' => DiscoveryClearCommand::class, 'name' => 'discovery:clear'],
         'DiscoveryGenerateCommand' => ['class' => DiscoveryGenerateCommand::class, 'name' => 'discovery:generate'],
         'DiscoveryStatusCommand' => ['class' => DiscoveryStatusCommand::class, 'name' => 'discovery:status'],
@@ -56,6 +62,10 @@ describe('Commands', function (): void {
         'PageCacheStatusCommand' => ['class' => PageCacheStatusCommand::class, 'name' => 'cache:status'],
         'PageCacheConfigCommand' => ['class' => PageCacheConfigCommand::class, 'name' => 'cache:config'],
         'PageCacheWarmCommand' => ['class' => PageCacheWarmCommand::class, 'name' => 'cache:warm'],
+        'DbExportCommand' => ['class' => DbExportCommand::class, 'name' => 'db:export'],
+        'ErrorsCommand' => ['class' => ErrorsCommand::class, 'name' => 'errors'],
+        'LogCommand' => ['class' => LogCommand::class, 'name' => 'log'],
+        'TraceCommand' => ['class' => TraceCommand::class, 'name' => 'trace'],
         'VerifyCommand' => ['class' => VerifyCommand::class, 'name' => 'verify'],
     ];
 

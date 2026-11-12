@@ -14,8 +14,11 @@ use Studiometa\Foehn\Console\Commands\MakeMenuCommand;
 use Studiometa\Foehn\Console\Commands\MakeModelCommand;
 use Studiometa\Foehn\Console\Commands\MakePatternCommand;
 use Studiometa\Foehn\Console\Commands\MakePostTypeCommand;
+use Studiometa\Foehn\Console\Commands\MakeSeederCommand;
 use Studiometa\Foehn\Console\Commands\MakeShortcodeCommand;
 use Studiometa\Foehn\Console\Commands\MakeTaxonomyCommand;
+use Studiometa\Foehn\Console\ProjectConventions;
+use Studiometa\Foehn\Console\Scaffolder;
 use Studiometa\Foehn\Console\WpCli;
 
 /**
@@ -35,7 +38,7 @@ function makeCommandContracts(): array
         'make:post-type' => [
             'class' => MakePostTypeCommand::class,
             'args' => ['gadget'],
-            'path' => 'PostTypes/GadgetPost',
+            'path' => 'Models/Gadget',
         ],
         'make:taxonomy' => [
             'class' => MakeTaxonomyCommand::class,
@@ -67,6 +70,7 @@ function makeCommandContracts(): array
         ],
         'make:menu' => ['class' => MakeMenuCommand::class, 'args' => ['SocialMenu'], 'path' => 'Menus/SocialMenu'],
         'make:model' => ['class' => MakeModelCommand::class, 'args' => ['Gizmo'], 'path' => 'Models/Gizmo'],
+        'make:seeder' => ['class' => MakeSeederCommand::class, 'args' => ['events'], 'path' => 'Seeders/EventsSeeder'],
         'make:shortcode' => [
             'class' => MakeShortcodeCommand::class,
             'args' => ['embed'],
@@ -85,11 +89,17 @@ beforeEach(function () {
     file_put_contents($this->root . '/composer.json', json_encode(['autoload' => ['psr-4' => ['Theme\\' => 'app/']]]));
 
     $this->generator = new ClassFileGenerator($this->appPath);
-    $this->make = fn(string $class): CliCommandInterface => new $class(new WpCli(), $this->generator);
+    $conventions = testProjectConventions($this->appPath);
+    $container = bootTestContainer();
+    $container->singleton(WpCli::class, new WpCli());
+    $container->singleton(ProjectConventions::class, $conventions);
+    $container->singleton(Scaffolder::class, new Scaffolder(new WpCli(), $this->generator, $conventions));
+    $this->make = fn(string $class): CliCommandInterface => $container->get($class);
 });
 
 afterEach(function () {
     exec('rm -rf ' . escapeshellarg($this->root));
+    tearDownTestContainer();
 });
 
 describe('every make: command', function () {

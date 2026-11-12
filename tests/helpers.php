@@ -41,6 +41,8 @@ function testTemplateControllerDiscovery(
     ?\Studiometa\Foehn\Views\Sections\SectionRequest $request = null,
     ?\Studiometa\Foehn\Views\Sections\SectionCollector $collector = null,
     ?\Studiometa\Foehn\Config\PageCacheConfig $pageCacheConfig = null,
+    ?\Studiometa\Foehn\Discovery\DiscoveryProblems $problems = null,
+    ?\Studiometa\Foehn\Trace\RequestTrace $requestTrace = null,
 ): \Studiometa\Foehn\Discovery\TemplateControllerDiscovery {
     $request ??= new \Studiometa\Foehn\Views\Sections\SectionRequest('GET', '/');
 
@@ -48,6 +50,8 @@ function testTemplateControllerDiscovery(
         $request,
         $collector ?? new \Studiometa\Foehn\Views\Sections\SectionCollector(),
         testSectionResponse($request, $pageCacheConfig),
+        $problems ?? new \Studiometa\Foehn\Discovery\DiscoveryProblems(),
+        $requestTrace ?? new \Studiometa\Foehn\Trace\RequestTrace(),
     );
 }
 
@@ -157,6 +161,27 @@ function discoverFixture(
 }
 
 /**
+ * Run a discovery over a class it must reject, and return what it reported.
+ *
+ * A rejected class is skipped, not registered: the helper asserts that the
+ * discovery collected nothing, so each test only states the problem.
+ *
+ * @param \Closure(\Studiometa\Foehn\Discovery\DiscoveryProblems): \Tempest\Discovery\Discovery $make
+ * @return list<array{class: string, attribute: string, reason: string, fix: string|null}>
+ */
+function rejectedProblems(\Closure $make, string $fixture): array
+{
+    $problems = new \Studiometa\Foehn\Discovery\DiscoveryProblems();
+    $discovery = $make($problems);
+
+    discoverFixture($discovery, $fixture);
+
+    expect(iterator_to_array($discovery->getItems(), false))->toBe([]);
+
+    return $problems->all();
+}
+
+/**
  * An app directory outside any Composer project.
  *
  * Discovery locations are built from the Composer root above the app path, so a
@@ -195,14 +220,112 @@ function testDiscoveryRunner(
     ?\Studiometa\Foehn\Config\FoehnConfig $config = null,
 ): \Studiometa\Foehn\Discovery\DiscoveryRunner {
     $pool = new \Symfony\Component\Cache\Adapter\ArrayAdapter();
+    $locations = new \Studiometa\Foehn\Discovery\DiscoveryLocations($appPath);
+
+    // As the Kernel does: a discovery that needs the locations, such as
+    // CliCommandDiscovery through InstalledPackages, gets the runner's.
+    $container->singleton(\Studiometa\Foehn\Discovery\DiscoveryLocations::class, fn() => $locations);
 
     return new \Studiometa\Foehn\Discovery\DiscoveryRunner(
         $container,
         new \Tempest\Discovery\DiscoveryCache(\Tempest\Discovery\DiscoveryCacheStrategy::NONE, $pool),
         $pool,
-        new \Studiometa\Foehn\Discovery\DiscoveryLocations($appPath),
+        $locations,
         $config,
     );
+}
+
+/**
+ * The conventions of a project whose classes discovery reads from $discoveredPath.
+ *
+ * Discovery runs here, before a test writes into $appPath classes that no autoloader
+ * can load: what the runner holds is the project as it was before the command.
+ */
+function testProjectConventions(
+    string $appPath,
+    ?string $discoveredPath = null,
+): \Studiometa\Foehn\Console\ProjectConventions {
+    $runner = testDiscoveryRunner(bootTestContainer(), $discoveredPath ?? $appPath);
+    $runner->getDiscoveries();
+
+    return new \Studiometa\Foehn\Console\ProjectConventions($appPath, $runner);
+}
+
+/**
+ * A CLI command discovery with the namespaces of the packages a Composer root installs.
+ *
+ * With no root, no location is in a package: every command is the project's.
+ */
+function testCliCommandDiscovery(
+    ?\Studiometa\Foehn\Config\FoehnConfig $config = null,
+    ?string $composerRoot = null,
+    ?\Studiometa\Foehn\Discovery\DiscoveryProblems $problems = null,
+): \Studiometa\Foehn\Discovery\CliCommandDiscovery {
+    return new \Studiometa\Foehn\Discovery\CliCommandDiscovery(
+        new \Tempest\Container\GenericContainer(),
+        $problems ?? new \Studiometa\Foehn\Discovery\DiscoveryProblems(),
+        $config ?? new \Studiometa\Foehn\Config\FoehnConfig(),
+        new \Studiometa\Foehn\Discovery\InstalledPackages(
+            new \Studiometa\Foehn\Discovery\DiscoveryLocations($composerRoot === null ? null : $composerRoot . '/app'),
+        ),
+    );
+}
+
+/**
+ * A Composer root in a temporary directory, with an `app` directory and packages.
+ *
+ * Each package is installed at `vendor/<name>` with its classes in `src/`, and its
+ * extra written to installed.json. A package with `'symlink' => true` is installed
+ * as a path repository with symlinks: its files are in `packages/<name>`, outside
+ * vendor/, and `vendor/<name>` links to them.
+ *
+ * @param array<string, array{extra?: array<string, mixed>, symlink?: bool}> $packages
+ */
+function testComposerRoot(array $packages): string
+{
+    $root = sys_get_temp_dir() . '/foehn-composer-root-' . uniqid();
+    mkdir($root . '/app', 0o777, true);
+    mkdir($root . '/vendor/composer', 0o777, true);
+    file_put_contents($root . '/composer.json', '{}');
+
+    $installed = [];
+
+    foreach ($packages as $name => $package) {
+        $vendorPath = $root . '/vendor/' . $name;
+
+        if ($package['symlink'] ?? false) {
+            mkdir($root . '/packages/' . $name . '/src', 0o777, true);
+            mkdir(dirname($vendorPath), 0o777, true);
+            symlink($root . '/packages/' . $name, $vendorPath);
+        } else {
+            mkdir($vendorPath . '/src', 0o777, true);
+        }
+
+        $installed[] = [
+            'name' => $name,
+            'autoload' => ['psr-4' => ['Acme\\' => 'src/']],
+            'extra' => $package['extra'] ?? [],
+            'install-path' => '../' . $name,
+        ];
+    }
+
+    file_put_contents($root . '/vendor/composer/installed.json', json_encode(['packages' => $installed]));
+
+    return $root;
+}
+
+/**
+ * Delete a Composer root testComposerRoot() made, its symlinks first.
+ */
+function removeTestComposerRoot(string $root): void
+{
+    foreach (glob($root . '/vendor/*/*') ?: [] as $path) {
+        if (is_link($path)) {
+            unlink($path);
+        }
+    }
+
+    removeTestDirectory($root);
 }
 
 /**
@@ -229,8 +352,9 @@ function removeTestDirectory(string $directory): void
 /**
  * Assert the behaviours every make: command shares, once per command.
  *
- * Generate, generate valid PHP, leave no placeholder, preview, refuse, force,
- * and reject a missing name — the same lines in every command. Shared rather
+ * Generate, generate valid PHP, leave no placeholder, preview, report as JSON,
+ * refuse, force, and reject a missing name — the shared Scaffolder and the same
+ * lines in every command. Shared rather
  * than copied because `packages/acf` ships three of these commands and two
  * copies of the contract would drift.
  *
@@ -285,6 +409,42 @@ function makeCommandContractSuite(array $contracts): void
             expect($logged)->toContain('Would create:');
         });
 
+        it("{$label} reports the file it would write as JSON on --dry-run", function () use ($class, $args, $relative) {
+            ($this->make)($class)($args, ['dry-run' => true, 'format' => 'json']);
+
+            $path = "{$this->appPath}/{$relative}";
+            $lines = wp_stub_get_calls('wp_cli_line');
+
+            expect(file_exists($path))->toBeFalse();
+            expect($lines)->toHaveCount(1);
+
+            $report = json_decode($lines[0]['args']['message'], true, flags: JSON_THROW_ON_ERROR);
+
+            expect($report['dryRun'])->toBeTrue();
+            expect($report['files'])->toHaveCount(1);
+            expect($report['files'][0]['path'])->toBe($path);
+            expect($report['files'][0]['status'])->toBe('would-create');
+            expect($report['files'][0]['contents'])->toContain('declare(strict_types=1);');
+            expect(wp_stub_get_calls('wp_cli_error'))->toBeEmpty();
+        });
+
+        it("{$label} reports the file it wrote as JSON", function () use ($class, $args, $relative) {
+            ($this->make)($class)($args, ['format' => 'json']);
+
+            $path = "{$this->appPath}/{$relative}";
+            $lines = wp_stub_get_calls('wp_cli_line');
+
+            expect($path)->toBeFile();
+            expect($lines)->toHaveCount(1);
+
+            $report = json_decode($lines[0]['args']['message'], true, flags: JSON_THROW_ON_ERROR);
+
+            expect($report['dryRun'])->toBeFalse();
+            expect($report['files'])->toBe([['path' => $path, 'status' => 'created']]);
+            expect($report['notes'])->toBeArray();
+            expect(wp_stub_get_calls('wp_cli_success'))->toBeEmpty();
+        });
+
         it("{$label} refuses to overwrite without --force", function () use ($class, $args, $relative) {
             $path = "{$this->appPath}/{$relative}";
 
@@ -296,6 +456,7 @@ function makeCommandContractSuite(array $contracts): void
 
             expect(file_get_contents($path))->toBe('<?php // hand-edited');
             expect(wp_stub_get_calls('wp_cli_error'))->toHaveCount(1);
+            expect(wp_stub_get_calls('wp_cli_error')[0]['args']['exit'])->toBeTrue();
             expect(wp_stub_get_calls('wp_cli_success'))->toBeEmpty();
         });
 
@@ -311,9 +472,12 @@ function makeCommandContractSuite(array $contracts): void
         });
 
         it("{$label} reports a missing name instead of generating", function () use ($class, $case) {
-            ($this->make)($class)([], []);
+            ($this->make)($class)([], ['format' => 'json']);
 
+            // An error that exits, never a question: a run without a terminal must end.
             expect(wp_stub_get_calls('wp_cli_error'))->toHaveCount(1);
+            expect(wp_stub_get_calls('wp_cli_error')[0]['args']['exit'])->toBeTrue();
+            expect(wp_stub_get_calls('wp_cli_line'))->toBeEmpty();
 
             $directory = dirname("{$this->appPath}/{$case['path']}");
 
@@ -419,6 +583,54 @@ function pageCacheBypass(?\Studiometa\Foehn\Config\PageCacheConfig $config = nul
 }
 
 /**
+ * The warmer, on the given config, with the eligibility rules of that config.
+ */
+function pageCacheWarmer(\Studiometa\Foehn\Config\PageCacheConfig $config): \Studiometa\Foehn\PageCache\Warmer
+{
+    return new \Studiometa\Foehn\PageCache\Warmer($config, new \Studiometa\Foehn\PageCache\Bypass($config));
+}
+
+/**
+ * A job dispatcher that keeps what it was given in `$jobs`, instead of scheduling it.
+ */
+function pageCacheJobs(bool $available = true): \Studiometa\Foehn\Contracts\JobDispatcher
+{
+    return new class($available) implements \Studiometa\Foehn\Contracts\JobDispatcher {
+        /** @var list<object> */
+        public array $jobs = [];
+
+        public function __construct(
+            private readonly bool $available,
+        ) {}
+
+        public function dispatch(object $job, ?int $delay = null): void
+        {
+            $this->jobs[] = $job;
+        }
+
+        public function isAvailable(): bool
+        {
+            return $this->available;
+        }
+    };
+}
+
+/**
+ * A purger on the given config, which queues its warm-up jobs in `$jobs`.
+ */
+function pageCachePurger(
+    \Studiometa\Foehn\Config\PageCacheConfig $config,
+    ?\Studiometa\Foehn\Contracts\JobDispatcher $jobs = null,
+): \Studiometa\Foehn\PageCache\Purger {
+    return new \Studiometa\Foehn\PageCache\Purger(
+        $config,
+        new \Studiometa\Foehn\PageCache\Invalidator($config, new \Studiometa\Foehn\PageCache\Store($config)),
+        pageCacheWarmer($config),
+        $jobs ?? pageCacheJobs(),
+    );
+}
+
+/**
  * A response body long enough and complete enough to be storable.
  */
 function pageCacheBody(string $extra = ''): string
@@ -515,4 +727,93 @@ function adminCacheRequestReset(): void
     $_POST = [];
     $_GET = [];
     unset($_SERVER['REQUEST_METHOD'], $GLOBALS['wp_stub_halted'], $GLOBALS['wp_stub_environment_type']);
+}
+
+/**
+ * A project root in a temporary directory, with an `app/` directory and the given
+ * files, for code that reads `vendor/` and `node_modules/` under the root.
+ *
+ * Built at run time rather than kept under Fixtures/: `vendor/` and `node_modules/`
+ * are ignored by many global gitignore files, so a committed copy could go missing
+ * from a contributor's tree without git saying so.
+ *
+ * @param array<string, string> $files Contents by path relative to the root
+ * @return string The root; its `app/` is the app path
+ */
+function testProjectRoot(array $files): string
+{
+    $root = sys_get_temp_dir() . '/foehn-tests/project-' . bin2hex(random_bytes(4));
+
+    mkdir($root . '/app', 0o777, true);
+    file_put_contents($root . '/composer.json', '{}');
+
+    foreach ($files as $path => $contents) {
+        if (!is_dir(dirname($root . '/' . $path))) {
+            mkdir(dirname($root . '/' . $path), 0o777, true);
+        }
+
+        file_put_contents($root . '/' . $path, $contents);
+    }
+
+    return $root;
+}
+
+/**
+ * A temporary directory for an error log, which a test removes with removeErrorLogDirectory().
+ */
+function errorLogDirectory(): string
+{
+    return sys_get_temp_dir() . '/foehn-error-log-' . bin2hex(random_bytes(4));
+}
+
+function removeErrorLogDirectory(string $directory): void
+{
+    foreach (glob($directory . '/*') ?: [] as $file) {
+        unlink($file);
+    }
+
+    if (is_dir($directory)) {
+        rmdir($directory);
+    }
+}
+
+/**
+ * Load Action Scheduler's schedule, action and cron expression classes.
+ *
+ * Action Scheduler is a WordPress plugin with its own autoloader, which needs
+ * WordPress. Its schedule classes do not: these are the real ones, so a test can
+ * check which date a schedule gives, not what a stub says. The `as_*()` functions
+ * stay stubbed in wp-stubs.php.
+ */
+function loadActionSchedulerSchedules(): void
+{
+    if (class_exists('ActionScheduler_CronSchedule', false)) {
+        return;
+    }
+
+    $root = \Composer\InstalledVersions::getInstallPath('woocommerce/action-scheduler');
+
+    foreach ([
+        'lib/cron-expression/CronExpression_FieldInterface.php',
+        'lib/cron-expression/CronExpression_AbstractField.php',
+        'lib/cron-expression/CronExpression_MinutesField.php',
+        'lib/cron-expression/CronExpression_HoursField.php',
+        'lib/cron-expression/CronExpression_DayOfMonthField.php',
+        'lib/cron-expression/CronExpression_MonthField.php',
+        'lib/cron-expression/CronExpression_DayOfWeekField.php',
+        'lib/cron-expression/CronExpression_YearField.php',
+        'lib/cron-expression/CronExpression_FieldFactory.php',
+        'lib/cron-expression/CronExpression.php',
+        'classes/ActionScheduler_DateTime.php',
+        'classes/schedules/ActionScheduler_Schedule.php',
+        'deprecated/ActionScheduler_Schedule_Deprecated.php',
+        'classes/abstracts/ActionScheduler_Abstract_Schedule.php',
+        'classes/abstracts/ActionScheduler_Abstract_RecurringSchedule.php',
+        'classes/schedules/ActionScheduler_CronSchedule.php',
+        'classes/schedules/ActionScheduler_IntervalSchedule.php',
+        'classes/actions/ActionScheduler_Action.php',
+        'classes/ActionScheduler_ScheduleDeserializer.php',
+    ] as $file) {
+        require_once $root . '/' . $file;
+    }
 }

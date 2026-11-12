@@ -12,11 +12,13 @@ use Studiometa\Foehn\Admin\Dashboard;
 use Studiometa\Foehn\Blocks\BlockEditorAssets;
 use Studiometa\Foehn\Cache\TransientCache;
 use Studiometa\Foehn\Config\ConfigLoader;
+use Studiometa\Foehn\Config\DatabaseExportConfig;
 use Studiometa\Foehn\Config\FoehnConfig;
 use Studiometa\Foehn\Config\PageCacheConfig;
 use Studiometa\Foehn\Config\RestConfig;
 use Studiometa\Foehn\Config\TimberConfig;
 use Studiometa\Foehn\Console\ClassFileGenerator;
+use Studiometa\Foehn\Console\ProjectConventions;
 use Studiometa\Foehn\Console\WpCli;
 use Studiometa\Foehn\Contracts\CacheInterface;
 use Studiometa\Foehn\Contracts\ImageTransformer;
@@ -24,8 +26,13 @@ use Studiometa\Foehn\Contracts\JobDispatcher;
 use Studiometa\Foehn\Contracts\ViewEngineInterface;
 use Studiometa\Foehn\Cron\Heartbeat;
 use Studiometa\Foehn\Cron\HeartbeatEvent;
+use Studiometa\Foehn\DebugLog\DebugLog;
 use Studiometa\Foehn\Discovery\DiscoveryLocations;
 use Studiometa\Foehn\Discovery\DiscoveryRunner;
+use Studiometa\Foehn\Errors\EntryBuilder;
+use Studiometa\Foehn\Errors\ErrorLog;
+use Studiometa\Foehn\Errors\ErrorRecorder;
+use Studiometa\Foehn\Errors\SourcePaths;
 use Studiometa\Foehn\Images\NullTransformer;
 use Studiometa\Foehn\Indexing\IndexingProtection;
 use Studiometa\Foehn\Jobs\ActionSchedulerJobDispatcher;
@@ -36,6 +43,10 @@ use Studiometa\Foehn\PageCache\Invalidator;
 use Studiometa\Foehn\PageCache\Purger;
 use Studiometa\Foehn\PageCache\Recorder;
 use Studiometa\Foehn\PageCache\Store;
+use Studiometa\Foehn\PageCache\Warmer;
+use Studiometa\Foehn\Trace\RequestTrace;
+use Studiometa\Foehn\Trace\RequestTracer;
+use Studiometa\Foehn\Trace\TraceStore;
 use Studiometa\Foehn\Verification\Updates\DiagnosticsCollector;
 use Studiometa\Foehn\Views\ContextProviderRegistry;
 use Studiometa\Foehn\Views\Sections\SectionCollector;
@@ -57,10 +68,11 @@ final class Kernel
     /**
      * Shape version of the cached discovery items.
      *
-     * Bump this whenever an attribute's promoted constructor changes: a cache
-     * written against the old signature is then ignored instead of restored.
+     * Bump this whenever an attribute's promoted constructor or the keys of a
+     * discovery's items change: a cache written against the old shape is then
+     * ignored instead of restored.
      */
-    private const DISCOVERY_CACHE_VERSION = 'foehn.discovery.v1';
+    private const DISCOVERY_CACHE_VERSION = 'foehn.discovery.v2';
 
     private static ?self $instance = null;
 
@@ -191,6 +203,12 @@ final class Kernel
         // Start recording diagnostics, before anything else Foehn does can raise one
         $this->startDiagnostics();
 
+        // Same reason: an error in Timber or in a lifecycle hook belongs in the error log
+        $this->startErrorRecorder();
+
+        // Before discovery registers the controllers and blocks the trace reports
+        $this->startRequestTracer();
+
         // Initialize Timber
         $this->initializeTimber();
 
@@ -249,6 +267,7 @@ final class Kernel
         $this->container->config(new TimberConfig());
         $this->container->config(new RestConfig());
         $this->container->config(new PageCacheConfig());
+        $this->container->config(new DatabaseExportConfig());
         $this->container->config($this->config !== [] ? FoehnConfig::fromArray($this->config) : new FoehnConfig());
 
         new ConfigLoader($this->container)->load($this->container->get(DiscoveryLocations::class)->all());
@@ -287,6 +306,10 @@ final class Kernel
         );
 
         $this->container->singleton(ClassFileGenerator::class, fn() => new ClassFileGenerator($this->appPath));
+        $this->container->singleton(
+            ProjectConventions::class,
+            fn() => new ProjectConventions($this->appPath, $this->container->get(DiscoveryRunner::class)),
+        );
 
         // The image transformer a project asked for, or none. Bound to the
         // interface so a template, a Twig function and the invalidation hooks all
@@ -321,6 +344,40 @@ final class Kernel
         // has to be the collector `wp foehn verify` reads back.
         $this->container->singleton(DiagnosticsCollector::class, static fn() => new DiagnosticsCollector());
 
+        // Registered whether or not errors are recorded: `wp foehn errors` reads and
+        // clears the log on a site that has just turned recording off.
+        $this->container->singleton(ErrorLog::class, static fn() => ErrorLog::inContentDirectory());
+
+        // The theme's own code is the directory that holds the app directory.
+        $this->container->singleton(SourcePaths::class, fn() => new SourcePaths(dirname($this->appPath)));
+
+        $this->container->singleton(ErrorRecorder::class, function (): ErrorRecorder {
+            $paths = $this->container->get(SourcePaths::class);
+            $request = $this->container->get(RequestTrace::class);
+
+            return new ErrorRecorder(
+                $this->container->get(ErrorLog::class),
+                new EntryBuilder($paths, $request),
+                $paths,
+                $request,
+            );
+        });
+
+        // Registered whether or not requests are traced, for the same reason as the log.
+        $this->container->singleton(TraceStore::class, static fn() => TraceStore::inContentDirectory());
+
+        // Resolved when `wp foehn log` runs: wp-config.php has defined the constants it reads.
+        $this->container->singleton(DebugLog::class, static fn() => DebugLog::fromWordPress());
+
+        $this->container->singleton(
+            RequestTracer::class,
+            fn(): RequestTracer => new RequestTracer(
+                $this->container->get(RequestTrace::class),
+                $this->container->get(TraceStore::class),
+                $this->container->get(SourcePaths::class),
+            ),
+        );
+
         $this->container->singleton(JobRegistry::class, static fn() => new JobRegistry());
 
         $this->container->singleton(
@@ -332,7 +389,10 @@ final class Kernel
 
         $this->container->singleton(
             ViewEngineInterface::class,
-            fn() => new TimberViewEngine($this->container->get(ContextProviderRegistry::class)),
+            fn() => new TimberViewEngine(
+                $this->container->get(ContextProviderRegistry::class),
+                $this->container->get(RequestTrace::class),
+            ),
         );
 
         // SectionRequest and SectionCollector are request-scoped by the PHP process.
@@ -389,6 +449,8 @@ final class Kernel
             fn() => new Purger(
                 $this->container->get(PageCacheConfig::class),
                 $this->container->get(Invalidator::class),
+                $this->container->get(Warmer::class),
+                $this->container->get(JobDispatcher::class),
             ),
         );
     }
@@ -412,6 +474,32 @@ final class Kernel
         }
 
         $this->container->get(DiagnosticsCollector::class)->start();
+    }
+
+    /**
+     * Start writing errors to the log `wp foehn errors` reads, when the config asks
+     * for it: by default in the `local` and `development` environments only.
+     */
+    private function startErrorRecorder(): void
+    {
+        if (!$this->foehnConfig->recordsErrors()) {
+            return;
+        }
+
+        $this->container->get(ErrorRecorder::class)->start();
+    }
+
+    /**
+     * Trace front-end requests for `wp foehn trace`, when the config asks for it: by
+     * default in the `local` and `development` environments only.
+     */
+    private function startRequestTracer(): void
+    {
+        if (!$this->foehnConfig->tracesRequests()) {
+            return;
+        }
+
+        $this->container->get(RequestTracer::class)->start();
     }
 
     /**

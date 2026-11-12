@@ -4,16 +4,25 @@ declare(strict_types=1);
 
 namespace Studiometa\Foehn\Views;
 
-use RuntimeException;
 use Studiometa\Foehn\Contracts\ViewEngineInterface;
+use Studiometa\Foehn\Trace\RequestTrace;
+use Timber\Loader;
 use Timber\Site;
 use Timber\Timber;
+use Twig\Error\Error as TwigError;
 
 /**
  * Timber/Twig implementation of ViewEngineInterface.
  *
  * Wraps Timber's template rendering with context provider support
  * and shared data management.
+ *
+ * A failure names the view that was asked for. A Twig error keeps its message,
+ * its template and its line, and a missing template lists the directories
+ * Timber searched: see ViewRenderingFailed.
+ *
+ * A traced request keeps the context providers that ran for each view, and the
+ * views `renderFirst()` tried: see RequestTrace.
  */
 final class TimberViewEngine implements ViewEngineInterface
 {
@@ -22,6 +31,7 @@ final class TimberViewEngine implements ViewEngineInterface
 
     public function __construct(
         private readonly ContextProviderRegistry $contextProviders,
+        private readonly RequestTrace $trace,
     ) {}
 
     /**
@@ -34,16 +44,28 @@ final class TimberViewEngine implements ViewEngineInterface
         // Convert to TemplateContext if needed
         $templateContext = $this->toTemplateContext($context);
 
+        if ($this->trace->isTracing()) {
+            $this->trace->provideContext($resolved, array_map(
+                static fn(object $provider): string => $provider::class,
+                $this->contextProviders->providersFor($template),
+            ));
+        }
+
         // Apply context providers
         $templateContext = $this->contextProviders->provide($template, $templateContext);
 
         // Convert to array and merge with Timber globals and shared data
         $contextArray = array_merge(Timber::context_global(), $this->shared, $templateContext->toArray());
 
-        $result = Timber::compile($resolved, $contextArray);
+        try {
+            $result = Timber::compile($resolved, $contextArray);
+        } catch (TwigError $error) {
+            throw ViewRenderingFailed::inTwig($template, $error);
+        }
 
+        // Timber answers false, and logs, when no directory holds the file.
         if ($result === false) {
-            throw new RuntimeException("Failed to render template: {$template}");
+            throw $this->notFound([$template => $resolved]);
         }
 
         return is_string($result) ? $result : '';
@@ -59,10 +81,23 @@ final class TimberViewEngine implements ViewEngineInterface
                 continue;
             }
 
+            if ($this->trace->isTracing()) {
+                $this->trace->renderFirst(
+                    array_values(array_map($this->resolveTemplate(...), $templates)),
+                    $this->resolveTemplate($template),
+                );
+            }
+
             return $this->render($template, $context);
         }
 
-        throw new RuntimeException('No template found: ' . implode(', ', $templates));
+        $files = [];
+
+        foreach ($templates as $template) {
+            $files[$template] = $this->resolveTemplate($template);
+        }
+
+        throw $this->notFound($files);
     }
 
     /**
@@ -94,33 +129,44 @@ final class TimberViewEngine implements ViewEngineInterface
 
     /**
      * @inheritDoc
+     *
+     * Asked of Timber's own loader, so a template is found here exactly when
+     * rendering it would find it.
      */
     public function exists(string $template): bool
     {
-        $resolved = $this->resolveTemplate($template);
+        return new Loader()
+            ->get_loader()
+            ->exists($this->resolveTemplate($template));
+    }
+
+    /**
+     * The error for views no directory holds, with the directories Timber searched.
+     *
+     * The fix points at the first of them named after Timber's template directory
+     * (`templates`), where the project keeps its views: Timber searches the theme
+     * root first, and it is not where a view belongs.
+     *
+     * @param array<string, string> $files The file of each view, by view name
+     */
+    private function notFound(array $files): ViewRenderingFailed
+    {
+        // Timber also adds the filesystem root, so that a view can be named by its
+        // absolute path. No relative view name belongs there, so it is left out.
+        $directories = array_values(array_filter(
+            array_map(static fn(string $path): string => rtrim($path, '/'), new Loader()->get_loader()->getPaths()),
+            static fn(string $path): bool => $path !== '',
+        ));
         /** @var string|list<string> $dirname */
         $dirname = Timber::$dirname;
-        $locations = is_string($dirname) ? [$dirname] : $dirname;
+        $names = is_string($dirname) ? [$dirname] : $dirname;
+        $templates = array_find($directories, static fn(string $directory): bool => in_array(
+            basename($directory),
+            $names,
+            true,
+        ));
 
-        foreach ($locations as $location) {
-            $basePath = get_template_directory();
-            $path = $basePath . '/' . $location . '/' . $resolved;
-
-            if (file_exists($path)) {
-                return true;
-            }
-
-            // Also check child theme if applicable
-            $childPath = get_stylesheet_directory();
-            if ($childPath !== $basePath) {
-                $path = $childPath . '/' . $location . '/' . $resolved;
-                if (file_exists($path)) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
+        return ViewRenderingFailed::notFound($files, $directories, $templates ?? $directories[0] ?? null);
     }
 
     /**

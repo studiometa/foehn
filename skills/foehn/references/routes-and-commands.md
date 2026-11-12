@@ -115,7 +115,7 @@ WordPress passes `''` as `$atts` when the shortcode has no attributes. Føhn tur
 
 ## `#[AsCliCommand]`
 
-On a class that implements `Studiometa\Foehn\Console\CliCommandInterface`. Without the interface, the command is not registered. The command is `wp foehn <name>`.
+On a class that implements `Studiometa\Foehn\Console\CliCommandInterface`. Without the interface, the command is not registered. A command of the project is `wp app <name>`, a command of Føhn is `wp foehn <name>`, and a command of another package is under the namespace of that package: `wp foehn-acf <name>`. `cliNamespace` in `app/foehn.config.php` changes `app`. A package changes its own with `"extra": {"foehn": {"cli-namespace": "<name>"}}` in its `composer.json`. `wp foehn inspect cli-commands` gives the line that runs each command.
 
 ```php
 namespace App\Console;
@@ -138,7 +138,7 @@ use Studiometa\Foehn\Console\WpCli;
 
         ## EXAMPLES
 
-            wp foehn import:projects projects.csv --dry-run
+            wp app import:projects projects.csv --dry-run
         DOC,
 )]
 final readonly class ImportProjectsCommand implements CliCommandInterface
@@ -163,6 +163,7 @@ final readonly class ImportProjectsCommand implements CliCommandInterface
 ```
 
 - `longDescription` uses the WP-CLI docblock format. WP-CLI reads the `## OPTIONS` synopsis from it to validate arguments.
+- Give `writes: true` to a command that changes content or files. When `wp_get_environment_type()` is `production`, Føhn then stops it before it runs, unless `--force` or `--dry-run` is given. Declare `[--force]` (and `[--dry-run]` when the command has it) in `longDescription`, or WP-CLI rejects the option. The command does not check the environment itself.
 - `Studiometa\Foehn\Console\WpCli` wraps `WP_CLI`: `log`, `line`, `success`, `warning`, `error`, `halt`, `confirm`, `prompt`, `table`, `colorize`, `withSpinner`. You can also call `WP_CLI` directly.
 
 ## Background jobs: `#[AsJob]`
@@ -214,9 +215,22 @@ final readonly class PurgeExpiredExports
         // …
     }
 }
+
+#[AsCron('0 0 * * *')] // cron expression, in the site timezone (wp_timezone())
+final readonly class PurgeAgenda
+{
+    public function __invoke(): void
+    {
+        // …
+    }
+}
 ```
 
-The class needs a public `__invoke()` with no required arguments. Føhn schedules it with Action Scheduler when it is not scheduled yet. Without Action Scheduler, nothing is scheduled.
+The class needs a public `__invoke()` with no required arguments. Føhn schedules it with Action Scheduler when it is not scheduled yet, and schedules it again when its interval or expression changed. Without Action Scheduler, nothing is scheduled.
+
+- An interval starts at the first request after a deploy, so a daily job runs at any hour. Use an expression for a fixed time of day.
+- An expression has five fields (minute, hour, day of month, month, day of week). Each field takes `*`, numbers, ranges, lists and steps; no names, no `@daily`. An invalid expression skips the class and records a discovery problem.
+- Føhn does not use `as_schedule_cron_action()`: it reads expressions in UTC. Føhn saves the action with `SiteTimezoneCronSchedule` instead.
 
 ## `#[AsTwigExtension]`
 

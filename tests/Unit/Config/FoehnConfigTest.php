@@ -147,5 +147,73 @@ describe('FoehnConfig', function () {
             expect($config->debug)->toBeFalse();
             expect($config->isDebugEnabled())->toBeFalse();
         });
+        it('creates config with the cli namespace of the project', function () {
+            expect(FoehnConfig::fromArray([])->cliNamespace)->toBe('app');
+            expect(FoehnConfig::fromArray(['cli_namespace' => 'site'])->cliNamespace)->toBe('site');
+        });
+
+        it('refuses a cli namespace that WP-CLI cannot reach or that is the framework one', function (string $namespace) {
+            expect(fn() => new FoehnConfig(cliNamespace: $namespace))
+                ->toThrow(InvalidArgumentException::class, sprintf('"%s" is not a valid cliNamespace', $namespace));
+        })->with(['empty' => [''], 'space' => ['my site'], 'uppercase' => ['App'], 'framework' => ['foehn']]);
+    });
+    describe('recordsErrors', function () {
+        afterEach(fn() => wp_stub_reset());
+
+        it('records errors in the local and development environments by default', function (
+            string $environment,
+            bool $records,
+        ) {
+            $GLOBALS['wp_stub_environment_type'] = $environment;
+
+            expect(new FoehnConfig()->recordsErrors())->toBe($records);
+        })->with([
+            'local' => ['local', true],
+            'development' => ['development', true],
+            'staging' => ['staging', false],
+            'production' => ['production', false],
+        ]);
+
+        it('follows recordErrors when a project sets it', function () {
+            $GLOBALS['wp_stub_environment_type'] = 'local';
+
+            expect(new FoehnConfig(recordErrors: false)->recordsErrors())->toBeFalse();
+
+            $GLOBALS['wp_stub_environment_type'] = 'production';
+
+            expect(new FoehnConfig(recordErrors: true)->recordsErrors())->toBeTrue();
+            expect(FoehnConfig::fromArray(['record_errors' => true])->recordErrors)->toBeTrue();
+            expect(FoehnConfig::fromArray([])->recordErrors)->toBeNull();
+        });
+    });
+
+    describe('tracesRequests', function () {
+        afterEach(fn() => wp_stub_reset());
+
+        it('traces requests in the local and development environments by default', function (
+            string $environment,
+            bool $traces,
+        ) {
+            $GLOBALS['wp_stub_environment_type'] = $environment;
+
+            expect(new FoehnConfig()->tracesRequests())->toBe($traces);
+        })->with([
+            'local' => ['local', true],
+            'development' => ['development', true],
+            'staging' => ['staging', false],
+            'production' => ['production', false],
+        ]);
+
+        it('follows traceRequests when a project sets it', function () {
+            $GLOBALS['wp_stub_environment_type'] = 'local';
+
+            expect(new FoehnConfig(traceRequests: false)->tracesRequests())->toBeFalse();
+
+            $GLOBALS['wp_stub_environment_type'] = 'production';
+
+            expect(new FoehnConfig(traceRequests: true)->tracesRequests())->toBeTrue();
+            expect(FoehnConfig::fromArray(['trace_requests' => true])->traceRequests)->toBeTrue();
+            expect(FoehnConfig::fromArray([])->traceRequests)->toBeNull();
+        });
     });
 });

@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Studiometa\Foehn\Config;
 
+use InvalidArgumentException;
+use Studiometa\Foehn\Console\CliNamespace;
+use Studiometa\Foehn\Helpers\Env;
 use Tempest\Discovery\DiscoveryCacheStrategy;
 
 /**
@@ -70,7 +73,35 @@ final readonly class FoehnConfig
          * Defaults to WP_DEBUG constant value.
          */
         public bool $debug = false,
-    ) {}
+
+        /**
+         * Record errors to the log `wp foehn errors` reads.
+         * Null records them when the environment is `local` or `development`.
+         */
+        public ?bool $recordErrors = null,
+
+        /**
+         * Trace front-end requests for `wp foehn trace`.
+         * Null traces them when the environment is `local` or `development`.
+         */
+        public ?bool $traceRequests = null,
+
+        /**
+         * The WP-CLI command the project's own #[AsCliCommand] classes go under:
+         * `wp app <name>` by default. The framework's commands stay under `wp foehn`,
+         * and each other package's go under its own namespace. One word of lowercase
+         * letters, digits, `-` and `_`, and not `foehn`: see CliNamespace::isValid().
+         */
+        public string $cliNamespace = 'app',
+    ) {
+        if (!CliNamespace::isValid($cliNamespace)) {
+            throw new InvalidArgumentException(sprintf(
+                '"%s" is not a valid cliNamespace: use %s.',
+                $cliNamespace,
+                CliNamespace::RULE,
+            ));
+        }
+    }
 
     /**
      * Create config from array (typically from Kernel::boot config).
@@ -100,6 +131,9 @@ final readonly class FoehnConfig
             hooks: $hooks,
             imageTransformer: $transformer,
             debug: (bool) $debug,
+            recordErrors: ($config['record_errors'] ?? null) === null ? null : (bool) $config['record_errors'],
+            traceRequests: ($config['trace_requests'] ?? null) === null ? null : (bool) $config['trace_requests'],
+            cliNamespace: $config['cli_namespace'] ?? 'app',
         );
     }
 
@@ -109,6 +143,28 @@ final readonly class FoehnConfig
     public function isDebugEnabled(): bool
     {
         return $this->debug;
+    }
+
+    /**
+     * Whether errors are recorded to the log `wp foehn errors` reads.
+     *
+     * Off in production unless a project turns it on: an entry holds paths, messages
+     * and URLs, and writing it costs a file write per error.
+     */
+    public function recordsErrors(): bool
+    {
+        return $this->recordErrors ?? in_array(Env::get(), ['local', 'development'], true);
+    }
+
+    /**
+     * Whether front-end requests are traced for `wp foehn trace`.
+     *
+     * Off in production unless a project turns it on: each request then writes a file
+     * and sends its id in a response header.
+     */
+    public function tracesRequests(): bool
+    {
+        return $this->traceRequests ?? in_array(Env::get(), ['local', 'development'], true);
     }
 
     /**

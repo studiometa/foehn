@@ -28,11 +28,21 @@ function wp_stub_reset(): void
     $GLOBALS['wp_stub_acf_field_types'] = [];
     $GLOBALS['wp_stub_acf_stores'] = [];
     $GLOBALS['wp_stub_options'] = [];
+    $GLOBALS['wp_stub_taxonomies'] = [];
+    $GLOBALS['wp_stub_post_types'] = [];
+    $GLOBALS['wp_stub_public_post_types'] = [];
+    $GLOBALS['wp_stub_public_taxonomies'] = [];
+    $GLOBALS['wp_stub_site_options'] = [];
+    $GLOBALS['wp_stub_plugins'] = [];
+    $GLOBALS['wp_stub_mu_plugins'] = [];
+    // WordPress keeps add_theme_support() in this global, and nothing else lists it.
+    $GLOBALS['_wp_theme_features'] = [];
     $GLOBALS['wp_stub_attachments'] = [];
     $GLOBALS['wp_stub_post_meta'] = [];
     $GLOBALS['wp_stub_post_fields'] = [];
     $GLOBALS['wp_stub_terms'] = [];
     $GLOBALS['wp_stub_query_posts'] = [];
+    unset($GLOBALS['wp_stub_get_posts'], $GLOBALS['wp_stub_insert_post']);
     if (!function_exists('wp_get_environment_type')) {
         function wp_get_environment_type(): string
         {
@@ -41,6 +51,9 @@ function wp_stub_reset(): void
     }
 
     $GLOBALS['wp_stub_as_has_scheduled'] = [];
+    // Pending actions `as_get_scheduled_actions()` answers with, by hook.
+    $GLOBALS['wp_stub_as_scheduled_actions'] = [];
+    $GLOBALS['wp_stub_timezone'] = 'UTC';
     // The scheduled-event queue `_get_cron_array()` answers with. Reset, because a
     // backlog left behind by one test would make the next one report a site in trouble.
     $GLOBALS['wp_stub_cron_events'] = [];
@@ -62,7 +75,14 @@ function wp_stub_reset(): void
     $GLOBALS['wp_stub_post_ancestors'] = [];
     $GLOBALS['wp_stub_adjacent_posts'] = [];
     $GLOBALS['wp_stub_sitemap_urls'] = [];
-    unset($GLOBALS['wp_stub_sitemap_providers'], $GLOBALS['wp_stub_remote_status'], $GLOBALS['wp_stub_remote_error']);
+    unset(
+        $GLOBALS['wp_stub_sitemap_providers'],
+        $GLOBALS['wp_stub_remote_status'],
+        $GLOBALS['wp_stub_remote_error'],
+        $GLOBALS['wp_stub_remote_headers'],
+        $GLOBALS['wp_stub_remote_bodies'],
+        $GLOBALS['wp_stub_num_queries'],
+    );
 
     // The admin controls read all four. A referer left behind would make a redirect land
     // somewhere a later test never set up, and a leaked screen, queried object or global
@@ -224,6 +244,11 @@ if (!class_exists('WP_Error')) {
             public string $code = '',
             public string $message = '',
         ) {}
+
+        public function get_error_message(): string
+        {
+            return $this->message;
+        }
     }
 }
 
@@ -525,6 +550,52 @@ if (!function_exists('register_taxonomy')) {
         wp_stub_record('register_taxonomy', compact('taxonomy', 'objectType', 'args'));
 
         return new WP_Taxonomy($taxonomy);
+    }
+}
+
+if (!function_exists('taxonomy_exists')) {
+    /**
+     * Core's own taxonomies, and the ones a test adds to $GLOBALS['wp_stub_taxonomies'].
+     */
+    function taxonomy_exists(string $taxonomy): bool
+    {
+        return in_array($taxonomy, ['category', 'post_tag', ...($GLOBALS['wp_stub_taxonomies'] ?? [])], true);
+    }
+}
+
+if (!function_exists('post_type_exists')) {
+    /**
+     * Core's own post types, and the ones a test adds to $GLOBALS['wp_stub_post_types'].
+     */
+    function post_type_exists(string $postType): bool
+    {
+        return in_array($postType, ['post', 'page', 'attachment', ...($GLOBALS['wp_stub_post_types'] ?? [])], true);
+    }
+}
+
+if (!function_exists('get_post_types')) {
+    /**
+     * Core's public post types, and the ones a test adds to
+     * $GLOBALS['wp_stub_public_post_types'], keyed by name as WordPress gives them.
+     */
+    function get_post_types(array|string $args = [], string $output = 'names', string $operator = 'and'): array
+    {
+        $types = ['post', 'page', 'attachment', ...($GLOBALS['wp_stub_public_post_types'] ?? [])];
+
+        return array_combine($types, $types);
+    }
+}
+
+if (!function_exists('get_taxonomies')) {
+    /**
+     * Core's public taxonomies, and the ones a test adds to
+     * $GLOBALS['wp_stub_public_taxonomies'], keyed by name as WordPress gives them.
+     */
+    function get_taxonomies(array $args = [], string $output = 'names', string $operator = 'and'): array
+    {
+        $taxonomies = ['category', 'post_tag', ...($GLOBALS['wp_stub_public_taxonomies'] ?? [])];
+
+        return array_combine($taxonomies, $taxonomies);
     }
 }
 
@@ -1465,6 +1536,33 @@ if (!function_exists('get_option')) {
     }
 }
 
+if (!function_exists('get_site_option')) {
+    function get_site_option(string $option, mixed $default = false): mixed
+    {
+        return $GLOBALS['wp_stub_site_options'][$option] ?? $default;
+    }
+}
+
+if (!function_exists('get_plugins')) {
+    /**
+     * @return array<string, array<string, string>>
+     */
+    function get_plugins(string $plugin_folder = ''): array
+    {
+        return $GLOBALS['wp_stub_plugins'] ?? [];
+    }
+}
+
+if (!function_exists('get_mu_plugins')) {
+    /**
+     * @return array<string, array<string, string>>
+     */
+    function get_mu_plugins(): array
+    {
+        return $GLOBALS['wp_stub_mu_plugins'] ?? [];
+    }
+}
+
 if (!function_exists('update_option')) {
     function update_option(string $option, mixed $value, string|bool|null $autoload = null): bool
     {
@@ -1587,6 +1685,44 @@ if (!function_exists('get_post_meta')) {
     }
 }
 
+if (!function_exists('update_post_meta')) {
+    function update_post_meta(int $postId, string $key, mixed $value): bool
+    {
+        wp_stub_record('update_post_meta', compact('postId', 'key', 'value'));
+
+        $GLOBALS['wp_stub_post_meta'][$postId][$key] = $value;
+
+        return true;
+    }
+}
+
+if (!function_exists('get_posts')) {
+    /**
+     * Answers with `$GLOBALS['wp_stub_get_posts']`, whatever the arguments, or with
+     * what it returns for them when it is a closure.
+     */
+    function get_posts(array $args = []): array
+    {
+        wp_stub_record('get_posts', compact('args'));
+        $posts = $GLOBALS['wp_stub_get_posts'] ?? [];
+
+        return $posts instanceof Closure ? $posts($args) : $posts;
+    }
+}
+
+if (!function_exists('wp_insert_post')) {
+    /**
+     * Answers with `$GLOBALS['wp_stub_insert_post']` when a test sets it (a WP_Error,
+     * for example), with the ID of the post it updates, or with 100.
+     */
+    function wp_insert_post(array $postarr, bool $wp_error = false): int|WP_Error
+    {
+        wp_stub_record('wp_insert_post', compact('postarr', 'wp_error'));
+
+        return $GLOBALS['wp_stub_insert_post'] ?? $postarr['ID'] ?? 100;
+    }
+}
+
 $GLOBALS['wp_stub_attachments'] = [];
 $GLOBALS['wp_stub_post_meta'] = [];
 
@@ -1695,6 +1831,13 @@ if (!function_exists('wp_get_theme')) {
     }
 }
 
+if (!function_exists('wp_timezone')) {
+    function wp_timezone(): DateTimeZone
+    {
+        return new DateTimeZone($GLOBALS['wp_stub_timezone'] ?? 'UTC');
+    }
+}
+
 if (!function_exists('is_ssl')) {
     function is_ssl(): bool
     {
@@ -1748,6 +1891,60 @@ if (!function_exists('as_has_scheduled_action')) {
         wp_stub_record('as_has_scheduled_action', compact('hook', 'args', 'group'));
 
         return $GLOBALS['wp_stub_as_has_scheduled'][$hook] ?? false;
+    }
+}
+
+if (!function_exists('as_get_scheduled_actions')) {
+    /**
+     * @param array<string, mixed> $args
+     * @return array<int, object>
+     */
+    function as_get_scheduled_actions(array $args = [], string $return_format = 'OBJECT'): array
+    {
+        wp_stub_record('as_get_scheduled_actions', compact('args', 'return_format'));
+
+        return $GLOBALS['wp_stub_as_scheduled_actions'][$args['hook'] ?? ''] ?? [];
+    }
+}
+
+if (!function_exists('as_get_datetime_object')) {
+    // Same as Action Scheduler's: every date it makes is in UTC.
+    function as_get_datetime_object(mixed $date_string = null, string $timezone = 'UTC'): DateTime
+    {
+        if ($date_string instanceof DateTime) {
+            return new ActionScheduler_DateTime($date_string->format('Y-m-d H:i:s'), new DateTimeZone($timezone));
+        }
+
+        if (is_numeric($date_string)) {
+            return new ActionScheduler_DateTime('@' . $date_string, new DateTimeZone($timezone));
+        }
+
+        return new ActionScheduler_DateTime($date_string ?? 'now', new DateTimeZone($timezone));
+    }
+}
+
+if (!class_exists('ActionScheduler', false)) {
+    /**
+     * The one Action Scheduler entry point Føhn calls outside the `as_*()` functions.
+     */
+    final class ActionScheduler
+    {
+        public static function is_initialized(?string $function_name = null): bool
+        {
+            return true;
+        }
+
+        public static function store(): object
+        {
+            return new class {
+                public function save_action(ActionScheduler_Action $action): int
+                {
+                    wp_stub_record('ActionScheduler::store()->save_action', compact('action'));
+
+                    return random_int(1, 99999);
+                }
+            };
+        }
     }
 }
 
@@ -1866,6 +2063,13 @@ if (!function_exists('is_robots')) {
     function is_robots(): bool
     {
         return wp_stub_conditional('is_robots');
+    }
+}
+
+if (!function_exists('is_favicon')) {
+    function is_favicon(): bool
+    {
+        return wp_stub_conditional('is_favicon');
     }
 }
 
@@ -2030,7 +2234,39 @@ if (!function_exists('wp_remote_get')) {
             return new WP_Error('http_request_failed', 'stubbed failure');
         }
 
-        return ['response' => ['code' => $GLOBALS['wp_stub_remote_status'] ?? 200]];
+        // With bodies set, a URL that has none answers 404, like a sitemap that is not there.
+        $bodies = $GLOBALS['wp_stub_remote_bodies'] ?? null;
+
+        if (is_array($bodies) && !array_key_exists($url, $bodies)) {
+            return ['response' => ['code' => 404], 'headers' => [], 'body' => ''];
+        }
+
+        return [
+            'response' => ['code' => $GLOBALS['wp_stub_remote_status'] ?? 200],
+            'headers' => array_change_key_case($GLOBALS['wp_stub_remote_headers'] ?? []),
+            'body' => is_array($bodies) ? $bodies[$url] : '',
+        ];
+    }
+}
+
+if (!function_exists('wp_remote_retrieve_body')) {
+    function wp_remote_retrieve_body(mixed $response): string
+    {
+        return is_array($response) ? (string) ($response['body'] ?? '') : '';
+    }
+}
+
+if (!function_exists('get_num_queries')) {
+    function get_num_queries(): int
+    {
+        return $GLOBALS['wp_stub_num_queries'] ?? 0;
+    }
+}
+
+if (!function_exists('wp_remote_retrieve_header')) {
+    function wp_remote_retrieve_header(mixed $response, string $header): array|string
+    {
+        return is_array($response) ? $response['headers'][strtolower($header)] ?? '' : '';
     }
 }
 

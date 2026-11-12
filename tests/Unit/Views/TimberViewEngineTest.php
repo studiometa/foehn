@@ -3,14 +3,17 @@
 declare(strict_types=1);
 
 use Studiometa\Foehn\Contracts\ContextProviderInterface;
+use Studiometa\Foehn\Trace\RequestTrace;
 use Studiometa\Foehn\Views\ContextProviderRegistry;
 use Studiometa\Foehn\Views\TemplateContext;
 use Studiometa\Foehn\Views\TimberViewEngine;
+use Studiometa\Foehn\Views\ViewRenderingFailed;
+use Timber\Timber;
 
 describe('TimberViewEngine', function () {
     beforeEach(function () {
         $this->contextProviders = new ContextProviderRegistry();
-        $this->engine = new TimberViewEngine($this->contextProviders);
+        $this->engine = new TimberViewEngine($this->contextProviders, new RequestTrace());
     });
 
     it('starts with no shared data', function () {
@@ -62,7 +65,7 @@ describe('TimberViewEngine', function () {
 describe('TimberViewEngine template resolution', function () {
     beforeEach(function () {
         $this->contextProviders = new ContextProviderRegistry();
-        $this->engine = new TimberViewEngine($this->contextProviders);
+        $this->engine = new TimberViewEngine($this->contextProviders, new RequestTrace());
     });
 
     it('adds twig extension when missing', function () {
@@ -111,7 +114,7 @@ describe('TimberViewEngine context providers', function () {
         $registry = new ContextProviderRegistry();
         $registry->register(['*'], $capturingProvider, 0);
 
-        $engine = new TimberViewEngine($registry);
+        $engine = new TimberViewEngine($registry, new RequestTrace());
 
         try {
             $engine->render('test-template', ['custom' => 'value']);
@@ -150,7 +153,7 @@ describe('TimberViewEngine context providers', function () {
         $registry->register(['*'], $modifyingProvider, 5);
         $registry->register(['*'], $capturingProvider, 10);
 
-        $engine = new TimberViewEngine($registry);
+        $engine = new TimberViewEngine($registry, new RequestTrace());
 
         try {
             $engine->render('test-template', []);
@@ -160,5 +163,102 @@ describe('TimberViewEngine context providers', function () {
 
         // The second provider should see data added by the first
         expect($capturedContext->get('added_by_provider'))->toBe('yes');
+    });
+});
+
+describe('TimberViewEngine errors', function () {
+    beforeEach(function () {
+        $this->theme = realpath(testFixturePath('ViewTheme'));
+        $this->dirname = Timber::$dirname;
+        $GLOBALS['wp_stub_template_directory'] = $this->theme;
+        $GLOBALS['wp_stub_stylesheet_directory'] = $this->theme;
+        Timber::$dirname = 'templates';
+
+        $this->engine = new TimberViewEngine(new ContextProviderRegistry(), new RequestTrace());
+    });
+
+    afterEach(function () {
+        unset($GLOBALS['wp_stub_template_directory'], $GLOBALS['wp_stub_stylesheet_directory']);
+        Timber::$dirname = $this->dirname;
+        // A trace that listens leaves its Timber filter behind.
+        wp_stub_reset();
+    });
+
+    it('renders a view it finds', function () {
+        expect($this->engine->render('hello', ['title' => 'Hi']))->toContain('<h1>Hi</h1>');
+        expect($this->engine->exists('hello'))->toBeTrue();
+        expect($this->engine->exists('nowhere'))->toBeFalse();
+    });
+
+    it('names the view, the directories it searched and the file to create', function () {
+        expect(fn() => $this->engine->render('pages/single'))
+            ->toThrow(
+                ViewRenderingFailed::class,
+                "No template found for the view 'pages/single'. Searched pages/single.twig in: {$this->theme}, {$this->theme}/templates."
+                . " Fix: create {$this->theme}/templates/pages/single.twig.",
+            );
+    });
+
+    it('names every view renderFirst tried', function () {
+        expect(fn() => $this->engine->renderFirst(['single-product', 'single']))
+            ->toThrow(
+                ViewRenderingFailed::class,
+                "No template found for the views 'single-product', 'single'. Searched single-product.twig, single.twig in: {$this->theme}, {$this->theme}/templates."
+                . " Fix: create one of single-product.twig, single.twig in {$this->theme}/templates.",
+            );
+    });
+
+    it('tells a traced request the view renderFirst chose and the views it was asked to try', function () {
+        $trace = new RequestTrace();
+        $trace->begin('a1b2c3');
+        $trace->listen();
+        $engine = new TimberViewEngine(new ContextProviderRegistry(), $trace);
+
+        $engine->renderFirst(['missing', 'hello'], ['title' => 'Hi']);
+
+        expect($trace->toArray()['views'][0])->toMatchArray([
+            'view' => 'hello.twig',
+            'candidates' => ['missing.twig', 'hello.twig'],
+        ]);
+    });
+
+    it('tells a traced request the context providers that ran, in the order they ran', function () {
+        $late = new class implements ContextProviderInterface {
+            public function provide(TemplateContext $context): TemplateContext
+            {
+                return $context;
+            }
+        };
+        $early = new class implements ContextProviderInterface {
+            public function provide(TemplateContext $context): TemplateContext
+            {
+                return $context->with('title', 'Hi');
+            }
+        };
+        $registry = new ContextProviderRegistry();
+        $registry->register(['hel*'], $late, 20);
+        $registry->register(['hello'], $early, 5);
+        $trace = new RequestTrace();
+        $trace->begin('a1b2c3');
+        $trace->listen();
+
+        new TimberViewEngine($registry, $trace)->render('hello');
+
+        expect($trace->toArray()['views'][0]['providers'])->toBe([$early::class, $late::class]);
+    });
+
+    it('keeps the Twig error, its template and its line, and the view that was asked for', function () {
+        try {
+            $this->engine->render('page');
+        } catch (ViewRenderingFailed $exception) {
+            expect($exception->getMessage())
+                ->toStartWith("Rendering the view 'page' failed in partials/card.twig at line 2: ");
+            expect($exception->getMessage())->toContain('Unable to find template "partials/missing.twig"');
+            expect($exception->getPrevious())->toBeInstanceOf(Twig\Error\LoaderError::class);
+
+            return;
+        }
+
+        $this->fail('Rendering a template that includes a missing one did not throw.');
     });
 });

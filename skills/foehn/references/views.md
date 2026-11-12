@@ -7,7 +7,7 @@ Docs: [Template controllers](https://studiometa.github.io/foehn-framework/guide/
 ## Request flow
 
 1. On `template_include`, Føhn computes one template name for the request, in this order: `404`, `search`, `front-page`, `home`; for a singular request `single-{type}-{slug}`, `single-{type}`, `single`, `page-{slug}`, `page-{id}`, `page`, `attachment`, `singular`; for an archive `archive-{type}` (post type archive), `category-{slug}`, `category`, `tag-{slug}`, `tag`, `taxonomy-{tax}-{term}`, `taxonomy-{tax}`, `taxonomy`, `author`, `date`, `archive`; else `index`. The slug, id and term variants (`single-{type}-{slug}`, `single-{type}`, `page-{slug}`, `page-{id}`, `category-{slug}`, `tag-{slug}`, `taxonomy-{tax}-{term}`, `taxonomy-{tax}`) are used only when a controller declares them (exactly or through a wildcard); otherwise the next, more general name is used. The other names are used as they are, even when no controller declares them: a post type archive is always `archive-{type}`, so `archive` alone does not cover it (declare `archive-*`).
-2. Føhn takes the controller that declares that exact name. If there is none, it takes the first controller whose wildcard (`single-*`) matches. Declare each exact name in one controller only.
+2. Føhn takes the controller that declares that exact name. If there is none, it tries the wildcards (`single-*`) in `priority` order and takes the first that matches. When several controllers declare the same name or wildcard, the lowest `priority` wins, and on a tie the one discovered last. Declare each exact name in one controller only.
 3. Føhn builds a `TemplateContext` from `Timber::context()`. The controller's `handle()` returns HTML, which Føhn prints, or `null` to let WordPress load its own template.
 4. Each `ViewEngineInterface::render()` call runs the context providers that match **the template name given to `render()`** (for example `pages/single`), in `priority` order, lowest first.
 
@@ -49,7 +49,21 @@ The starter's `ArchiveController` also declares `front-page` and `home`, and dec
 
 `archive` does not cover every archive. A custom taxonomy term page resolves to `taxonomy` (or `taxonomy-{tax}…` when declared), an author page to `author`, a date archive to `date`. The pattern `tax-*` matches none of these names. To render custom taxonomy, author and date archives through the archive controller, add `'taxonomy'`, `'taxonomy-*'`, `'author'` and `'date'` to its templates. A request with no matching controller falls back to WordPress and the theme's `index.php`.
 
-Password-protected posts: test `post_password_required($post->ID)` first and `render('pages/password', $context)`. The starter and the demo ship `templates/pages/password.twig`, which prints `{{ function('get_the_password_form', post.ID) }}` inside the base layout. A controller that takes over `single` or `page` must do this itself: Timber's `post.content` returns the full content of a protected post unless the `timber/post/content/show_password_form_for_protected` filter returns `true`, so falling back to the normal template (for example `renderFirst(['pages/password', 'pages/page'])`) prints the content the password guards. `render()` throws a `RuntimeException` when the template file is missing, and the request fails with a 500. Timber builds `post.excerpt` from the full content too, so a listing must test `{% if not post.password_required and post.excerpt %}` before it prints an excerpt. See [Password-protected posts](https://studiometa.github.io/foehn-framework/guide/template-controllers.md#password-protected-posts).
+Password-protected posts: test `post_password_required($post->ID)` first and `render('pages/password', $context)`. The starter and the demo ship `templates/pages/password.twig`, which prints `{{ function('get_the_password_form', post.ID) }}` inside the base layout. A controller that takes over `single` or `page` must do this itself: Timber's `post.content` returns the full content of a protected post unless the `timber/post/content/show_password_form_for_protected` filter returns `true`, so falling back to the normal template (for example `renderFirst(['pages/password', 'pages/page'])`) prints the content the password guards. `render()` throws `ViewRenderingFailed` (a `RuntimeException`) when the template file is missing, and the request fails with a 500; the message lists the directories searched and the file to create. Timber builds `post.excerpt` from the full content too, so a listing must test `{% if not post.password_required and post.excerpt %}` before it prints an excerpt. See [Password-protected posts](https://studiometa.github.io/foehn-framework/guide/template-controllers.md#password-protected-posts).
+
+### Generic controllers
+
+The starter and the demo ship one `SingleController` (`single`, `single-*`) and one `ArchiveController` (`archive`, `archive-*`, …) for every post type. Each calls `renderFirst()` with a list that starts with the most specific view:
+
+| Request                       | Views tried, first that exists wins                               |
+| ----------------------------- | ----------------------------------------------------------------- |
+| a single `event`              | `pages/single-event-<slug>`, `pages/single-event`, `pages/single` |
+| the `event` post type archive | `pages/archive-event`, `pages/archive`                            |
+| a category, a tag             | `pages/category` or `pages/tag`, then `pages/archive`             |
+
+A custom taxonomy term page resolves to `taxonomy`, which neither controller declares: `tax-*` matches no name (see above).
+
+So a new post type needs no controller: create `templates/pages/single-event.twig` and `templates/pages/archive-event.twig`, which extend `layouts/base.twig` like the other files in `pages/`. Without them, the generic views render the new type. The single view receives the post as `post` (an `Event` when the model is registered), the archive the posts as `posts` and `pagination`, `archive_title`, `archive_description`. Data for one type goes in a provider on that view: `#[AsContextProvider('pages/single-event')]`. Write a controller of its own (`#[AsTemplateController('single-event')]`) only when the type needs a different flow. These controllers are project code: read the project's copy, it can differ.
 
 ## `TemplateContext`
 
@@ -104,6 +118,7 @@ final readonly class RelatedProjectsProvider implements ContextProviderInterface
 
 - The patterns match the template name passed to `render()` or `renderFirst()`, not the WordPress hierarchy name. In the starter layout that is `pages/single`, `pages/archive`, `sections/posts`, `blocks/hero`, `settings/theme-settings`. `*` matches any characters, `/` included, so `'*'` runs for every render, blocks and sections too.
 - A provider for `'single'` does not run when the controller renders `pages/single`. This is the most common reason a provider "does nothing".
+- `wp foehn inspect templates views --format=json` gives the controller of each WordPress template with a URL that renders it (`url`, or `noUrl` with the reason), and each Twig file with the providers that match it. Both give the context keys known without rendering, once per controller or provider; `views.everyView` lists the providers on `*`, which match every view. When two controllers claim the same template, the lowest `priority` wins.
 - Use a context provider for data many templates share. Use a controller for data one page owns, and to choose the template.
 - `menus` is filled by `#[AsMenu]`. Read `menus.header.items` in Twig.
 
