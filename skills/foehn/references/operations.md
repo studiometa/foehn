@@ -8,14 +8,14 @@ Docs: [Configuration](https://studiometa.github.io/foehn-framework/guide/configu
 
 Each `theme/app/<name>.config.php` returns one object. Føhn registers it in the container under its class and its interfaces.
 
-| File                       | Class (`Studiometa\Foehn\Config\…`) | Main arguments                                                                                                                                                                                                                                                                                        |
-| -------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `foehn.config.php`         | `FoehnConfig`                       | `discoveryCacheStrategy` (`DiscoveryCacheStrategy::NONE`), `discoveryCachePath`, `hooks` (`[]`), `imageTransformer` (`null`), `debug` (`false`), `recordErrors`, `traceRequests` (`null` = `local` and `development` only)                                                                            |
-| `page-cache.config.php`    | `PageCacheConfig`                   | `enabled` (`false`), `ttl`, `environments` (`['production']`), `cacheQueryArgs`, `excludedPaths`, `excludeWhenBodyContains`, `ignoredQueryArgs`, `bypassCookies`, `cacheNotFound`, `browserMaxAge`, `cacheControl`, `responseHeaders`, `debugHeaders`, `warmAfterPurge`, `warmSitemap`, `warmExclude` |
-| `db-export.config.php`     | `DatabaseExportConfig`              | `window` (`'-2 months'`), `safeTables`, `structureOnlyTables`, `columns` (table => column => `Anonymizer`), `allowedEmailDomains`                                                                                                                                                                     |
-| `query-filters.config.php` | `QueryFiltersConfig`                | `taxonomies`, `publicVars`                                                                                                                                                                                                                                                                            |
-| `rest.config.php`          | `RestConfig`                        | `defaultCapability` (`'edit_posts'`; `null` = any logged-in user)                                                                                                                                                                                                                                     |
-| `timber.config.php`        | `TimberConfig`                      | `templatesDir` (`['templates']`)                                                                                                                                                                                                                                                                      |
+| File                       | Class (`Studiometa\Foehn\Config\…`) | Main arguments                                                                                                                                                                                                                                                                                                                              |
+| -------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `foehn.config.php`         | `FoehnConfig`                       | `discoveryCacheStrategy` (`DiscoveryCacheStrategy::NONE`), `discoveryCachePath`, `hooks` (`[]`), `imageTransformer` (`null`), `debug` (`false`), `recordErrors`, `traceRequests` (`null` = `local` and `development` only)                                                                                                                  |
+| `page-cache.config.php`    | `PageCacheConfig`                   | `enabled` (`false`), `storage` (`PageCacheStorage::Disk`), `ttl`, `environments` (`['production']`), `cacheQueryArgs`, `excludedPaths`, `excludeWhenBodyContains`, `ignoredQueryArgs`, `bypassCookies`, `cacheNotFound`, `browserMaxAge`, `cacheControl`, `responseHeaders`, `debugHeaders`, `warmAfterPurge`, `warmSitemap`, `warmExclude` |
+| `db-export.config.php`     | `DatabaseExportConfig`              | `window` (`'-2 months'`), `safeTables`, `structureOnlyTables`, `columns` (table => column => `Anonymizer`), `allowedEmailDomains`                                                                                                                                                                                                           |
+| `query-filters.config.php` | `QueryFiltersConfig`                | `taxonomies`, `publicVars`                                                                                                                                                                                                                                                                                                                  |
+| `rest.config.php`          | `RestConfig`                        | `defaultCapability` (`'edit_posts'`; `null` = any logged-in user)                                                                                                                                                                                                                                                                           |
+| `timber.config.php`        | `TimberConfig`                      | `templatesDir` (`['templates']`)                                                                                                                                                                                                                                                                                                            |
 
 The file name is free, but follow these names. `DiscoveryCacheStrategy` is `Tempest\Discovery\DiscoveryCacheStrategy` (`FULL`, `PARTIAL`, `NONE`).
 
@@ -183,6 +183,7 @@ return new PageCacheConfig(
 - Logged-in users, previews and password-protected posts are never cached. Search results are not cached unless `s` is in `cacheQueryArgs`.
 - `wp foehn cache:config --server=nginx|apache --write` writes the server config. Run it again after each change to `page-cache*.config.php`. `wp foehn cache:status` reports a stale snippet. `wp foehn cache:warm` fills the cache from the sitemap (`warmSitemap` names a plugin sitemap, `warmExclude` skips URLs). `warmAfterPurge: true` queues the warm-up of purged pages.
 - To try the cache locally, add `app/page-cache.local.config.php` with `environments: ['local']`.
+- For a site on more than one instance, `storage: PageCacheStorage::Bucket` stores pages in the s3-uploads bucket under `cache/pages/`, and the nginx snippet proxies hits from it. nginx only: the drop-in does not read and Apache is not supported. Hits are slower, the bucket must allow anonymous reads (as for the uploads), and every deploy must run `wp foehn cache:clear`, because `composer install` does not clear a bucket.
 - The generated nginx cache location has its own `add_header` lines, so nginx drops the `add_header` lines of the `server` level on a hit (for example `X-Frame-Options`). List those headers in `responseHeaders: ['X-Frame-Options' => 'SAMEORIGIN']` and regenerate the snippet. `cacheControl` replaces the whole `Cache-Control` value of a hit.
 
 ## Query filters
@@ -237,6 +238,16 @@ wp foehn verify --profile=production                                       # dep
 ```
 
 Exit status: `0` pass, `1` something to fix, `2` the gate could not run.
+
+The `production` profile has a `public-files` check: each file of `public/` (`extra.foehn.public-dir`) must be in the web root with the same content. To fix it, run `composer install`.
+
+## Public files
+
+- `web/` is generated again by each `composer install`. Do not write a file in `web/`. Put a file that must be at the document root (`.user.ini`, `robots.txt`, `favicon.ico`, `.well-known/`, `ads.txt`, verification files) in `public/`. The installer copies it into `web/`, dotfiles included.
+- The installer does not copy to `index.php`, `wp-config.php`, `wp/` or `wp-content/`, and does not copy symlinks. It shows a warning.
+- A file removed from `public/` is removed from `web/` on the next `composer install`.
+- Uploads, caches and secrets do not go in `public/`.
+- A `robots.txt` in `public/` is served in each environment, so on staging it replaces the `Disallow: /` of the indexing protection.
 
 `wp foehn salts:generate` writes the eight WordPress keys to `.env` when they are missing. `--force` rotates them and logs out every user. `--dry-run` names the file and the keys it would replace, and prints no key. The generated `wp-config.php` refuses a production request without keys.
 
