@@ -94,11 +94,12 @@ final readonly class PageCacheConfig
         public ?string $cacheControl = null,
 
         /**
-         * Static headers sent on every hit, by the drop-in and by nginx.
+         * Static headers that the nginx snippet sends on every hit.
          *
          * For the headers a server sets at server level: an nginx `location` with its own
          * `add_header` drops every `add_header` of the `server`, and the cache location has
-         * its own. Not sent on a page PHP renders, which already gets them from the server.
+         * its own. Not sent from PHP, by a page PHP renders or by the drop-in: a PHP
+         * response already gets them from the server.
          *
          * @var array<string, string>
          */
@@ -210,10 +211,11 @@ final readonly class PageCacheConfig
         public bool $warmAfterPurge = false,
 
         /**
-         * The sitemap or sitemap index to warm from, as a full URL.
+         * The sitemap or sitemap index to warm from: a path on the site, such as
+         * `/sitemap_index.xml`, read from `home_url()`, or a full URL.
          *
          * `null` reads the core WordPress sitemap. Set it when a plugin replaces that
-         * sitemap, for example `https://example.com/sitemap_index.xml`.
+         * sitemap.
          */
         public ?string $warmSitemap = null,
 

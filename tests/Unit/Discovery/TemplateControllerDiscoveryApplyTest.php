@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Studiometa\Foehn\Discovery\TemplateControllerDiscovery;
 use Studiometa\Foehn\Trace\RequestTrace;
 use Tests\Fixtures\TemplateControllerFixture;
 
@@ -44,6 +45,63 @@ describe('TemplateControllerDiscovery apply', function () {
         expect($result)->toBe('/path/to/404.php');
     });
 
+    it('leaves an oEmbed request to WordPress, which renders its embed template', function () {
+        $this->discovery->discover(
+            $this->location,
+            new \Tempest\Reflection\ClassReflector(TemplateControllerFixture::class),
+        );
+        $this->discovery->apply();
+
+        // The fixture claims `single`: an embed of a post is a single post too.
+        $GLOBALS['wp_stub_template'] = 'single';
+        wp_stub_set_conditional('is_embed', true);
+
+        expect($this->discovery->handleTemplateInclude('/wp/wp-includes/theme-compat/embed.php'))
+            ->toBe('/wp/wp-includes/theme-compat/embed.php');
+    });
+
+    it('lets a project skip the controllers for one request with a filter', function () {
+        $this->discovery->discover(
+            $this->location,
+            new \Tempest\Reflection\ClassReflector(TemplateControllerFixture::class),
+        );
+        $this->discovery->apply();
+
+        $GLOBALS['wp_stub_template'] = 'page';
+        $seen = [];
+        add_filter(
+            'foehn/template_controller/skip',
+            function (bool $skip, string $template, string $controller) use (&$seen): bool {
+                $seen = [$skip, $template, $controller];
+
+                return true;
+            },
+            10,
+            3,
+        );
+
+        // Without the filter, the controller would run and need Timber::context().
+        expect($this->discovery->handleTemplateInclude('/theme/page.php'))->toBe('/theme/page.php');
+        expect($seen)->toBe([false, 'page', TemplateControllerFixture::class]);
+    });
+
+    it('hands WordPress a template file that runs the controller, so WordPress includes it', function () {
+        $this->discovery->discover(
+            $this->location,
+            new \Tempest\Reflection\ClassReflector(TemplateControllerFixture::class),
+        );
+        $this->discovery->apply();
+
+        $GLOBALS['wp_stub_template'] = 'page';
+
+        // Nothing is rendered yet: the controller would need Timber::context().
+        $file = $this->discovery->handleTemplateInclude('/theme/page.php');
+
+        expect($file)->toBe(TemplateControllerDiscovery::TEMPLATE);
+        // WordPress includes only a readable `.php` file, after realpath().
+        expect(realpath($file))->toEndWith('/resources/templates/template-controller.php');
+    });
+
     it('registers filter even when no items discovered', function () {
         $this->discovery->apply();
 
@@ -61,9 +119,7 @@ describe('TemplateControllerDiscovery apply', function () {
 
         $GLOBALS['wp_stub_template'] = 'page';
 
-        // The controller then needs Timber::context(), which needs WordPress. The
-        // match is recorded before it runs.
-        expect(fn() => $discovery->handleTemplateInclude('/index.php'))->toThrow(Error::class);
+        $discovery->handleTemplateInclude('/index.php');
 
         expect($context->toArray()['template'])->toBe('page');
         expect($context->toArray()['controller'])->toBe(TemplateControllerFixture::class);

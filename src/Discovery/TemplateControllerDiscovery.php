@@ -31,6 +31,20 @@ final class TemplateControllerDiscovery implements Discovery
 {
     use IsWpDiscovery;
 
+    /** The template file WordPress includes for a request a controller handles. */
+    public const string TEMPLATE = __DIR__ . '/../../resources/templates/template-controller.php';
+
+    /**
+     * The controller of the current request and the template file WordPress chose, kept
+     * from `template_include` until WordPress includes {@see self::TEMPLATE}.
+     *
+     * Static, because that file is included from the global scope and has no other way
+     * to reach this instance. There is one main request per PHP request.
+     *
+     * @var array{controller: TemplateControllerInterface, template: string}|null
+     */
+    private static ?array $pending = null;
+
     private TemplateControllerMap $controllers;
 
     public function __construct(
@@ -106,8 +120,21 @@ final class TemplateControllerDiscovery implements Discovery
             return $this->sectionResponse->error($this->sectionRequest->errorStatus());
         }
 
+        // An oEmbed request (`/my-post/embed/`) is also a single post or a page. WordPress
+        // answers it with its embed template, which other sites show in an iframe: the
+        // full page of the theme has nothing to do there.
+        if (is_embed()) {
+            return $template;
+        }
+
         $templateType = $this->getTemplateType();
         $controller = $this->controllers->find($templateType);
+
+        // The supported way to leave one request to the template file WordPress chose:
+        // a plugin's own page, a request a project renders with PHP templates.
+        if ($controller !== null && $this->skips($templateType, $controller['className'])) {
+            $controller = null;
+        }
 
         // What an error entry and the request trace say this request rendered.
         $this->requestTrace->matchTemplate($templateType, $controller['className'] ?? null);
@@ -134,18 +161,54 @@ final class TemplateControllerDiscovery implements Discovery
                 : $this->sectionResponse->send($rendered);
         }
 
-        $context = TemplateContext::fromTimberContext(Timber::context());
-        $result = $instance->handle($context);
+        // Rendered by the template file below, not here: WordPress fires
+        // `wp_before_include_template`, and starts its template enhancement output
+        // buffer, only for a template file `template_include` returns. A page rendered
+        // here would be printed before that buffer, which moves the styles of the blocks
+        // printed late into the head.
+        self::$pending = ['controller' => $instance, 'template' => $template];
 
-        if ($result === null) {
-            return $template;
+        return self::TEMPLATE;
+    }
+
+    /**
+     * Run the controller `handleTemplateInclude()` kept for this request, and print the
+     * page it renders.
+     *
+     * Called by the template file WordPress includes ({@see self::TEMPLATE}).
+     *
+     * @return string|null The template file WordPress chose, to include when the
+     *                     controller returns null; null when the page was printed.
+     */
+    public static function renderPending(): ?string
+    {
+        $pending = self::$pending;
+        self::$pending = null;
+
+        if ($pending === null) {
+            return null;
         }
 
-        // Output the result and prevent WordPress from loading the template
+        $result = $pending['controller']->handle(TemplateContext::fromTimberContext(Timber::context()));
+
+        if ($result === null) {
+            return $pending['template'] !== '' ? $pending['template'] : null;
+        }
+
         echo $result;
 
-        // Return empty string to prevent WordPress from including the template
-        return '';
+        return null;
+    }
+
+    /**
+     * Whether the `foehn/template_controller/skip` filter skips the controller of this
+     * request.
+     *
+     * @param class-string $controller
+     */
+    private function skips(string $template, string $controller): bool
+    {
+        return (bool) apply_filters('foehn/template_controller/skip', false, $template, $controller);
     }
 
     /**
@@ -227,12 +290,19 @@ final class TemplateControllerDiscovery implements Discovery
             $post = get_queried_object();
             $post = $post instanceof \WP_Post ? $post : null;
 
+            $pageTemplate = $post !== null ? get_page_template_slug($post) : null;
+            $pageTemplate = is_string($pageTemplate) ? $pageTemplate : null;
+
             if (is_single()) {
-                return $this->controllers->resolve(TemplateNames::single((string) get_post_type(), $post?->post_name));
+                return $this->controllers->resolve(TemplateNames::single(
+                    (string) get_post_type(),
+                    $post?->post_name,
+                    $pageTemplate,
+                ));
             }
 
             if (is_page()) {
-                return $this->controllers->resolve(TemplateNames::page($post?->post_name, $post?->ID));
+                return $this->controllers->resolve(TemplateNames::page($post?->post_name, $post?->ID, $pageTemplate));
             }
 
             if (is_attachment()) {

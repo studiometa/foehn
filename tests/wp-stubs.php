@@ -44,7 +44,7 @@ function wp_stub_reset(): void
     $GLOBALS['wp_stub_post_fields'] = [];
     $GLOBALS['wp_stub_terms'] = [];
     $GLOBALS['wp_stub_query_posts'] = [];
-    unset($GLOBALS['wp_stub_get_posts'], $GLOBALS['wp_stub_insert_post']);
+    unset($GLOBALS['wp_stub_get_posts'], $GLOBALS['wp_stub_insert_post'], $GLOBALS['wp_stub_home_url']);
     if (!function_exists('wp_get_environment_type')) {
         function wp_get_environment_type(): string
         {
@@ -854,6 +854,16 @@ if (!function_exists('is_single')) {
     function is_single(): bool
     {
         return $GLOBALS['wp_stub_template'] === 'single';
+    }
+}
+
+if (!function_exists('get_page_template_slug')) {
+    function get_page_template_slug(int|WP_Post|null $post = null): string|false
+    {
+        $id = $post instanceof WP_Post ? $post->ID : (int) $post;
+        $template = $GLOBALS['wp_stub_post_meta'][$id]['_wp_page_template'] ?? '';
+
+        return $template === 'default' ? '' : (string) $template;
     }
 }
 
