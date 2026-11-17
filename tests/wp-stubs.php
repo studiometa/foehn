@@ -44,18 +44,19 @@ function wp_stub_reset(): void
     $GLOBALS['wp_stub_post_fields'] = [];
     $GLOBALS['wp_stub_terms'] = [];
     $GLOBALS['wp_stub_query_posts'] = [];
+    $GLOBALS['wp_stub_block_supports'] = [];
     unset($GLOBALS['wp_stub_get_posts'], $GLOBALS['wp_stub_insert_post'], $GLOBALS['wp_stub_home_url']);
     if (!function_exists('wp_get_additional_image_sizes')) {
-    /**
-     * @return array<string, array<string, mixed>>
-     */
-    function wp_get_additional_image_sizes(): array
-    {
-        return $GLOBALS['_wp_additional_image_sizes'] ?? [];
+        /**
+         * @return array<string, array<string, mixed>>
+         */
+        function wp_get_additional_image_sizes(): array
+        {
+            return $GLOBALS['_wp_additional_image_sizes'] ?? [];
+        }
     }
-}
 
-if (!function_exists('wp_get_environment_type')) {
+    if (!function_exists('wp_get_environment_type')) {
         function wp_get_environment_type(): string
         {
             return $GLOBALS['wp_stub_environment_type'] ?? 'production';
@@ -117,6 +118,10 @@ if (!function_exists('wp_get_environment_type')) {
     // Theme paths fall back to their stub defaults, so a test that points them at
     // a fixture directory cannot leak that into the next one.
     unset($GLOBALS['wp_stub_template_directory'], $GLOBALS['wp_stub_template_directory_uri']);
+    unset($GLOBALS['wp_stub_stylesheet']);
+
+    // The Icons API registry: icon name => SVG markup wp_get_icon() answers with.
+    $GLOBALS['wp_stub_icons'] = [];
 }
 
 /**
@@ -437,6 +442,30 @@ if (!class_exists('WP_Customize_Manager')) {
         public function add_control(string $id, array $args = []): void
         {
             $this->controls[$id] = $args;
+        }
+    }
+}
+
+if (!class_exists('WP_Block_Supports')) {
+    /**
+     * Answers no support attributes, as core does outside a block render. A test sets
+     * `$GLOBALS['wp_stub_block_supports']` to answer others. Each call is recorded.
+     */
+    class WP_Block_Supports
+    {
+        public static function get_instance(): self
+        {
+            return new self();
+        }
+
+        /**
+         * @return array<string, string>
+         */
+        public function apply_block_supports(): array
+        {
+            wp_stub_record('apply_block_supports', []);
+
+            return $GLOBALS['wp_stub_block_supports'] ?? [];
         }
     }
 }
@@ -1276,6 +1305,13 @@ if (!function_exists('get_theme_file_uri')) {
     }
 }
 
+if (!function_exists('get_stylesheet')) {
+    function get_stylesheet(): string
+    {
+        return $GLOBALS['wp_stub_stylesheet'] ?? 'theme';
+    }
+}
+
 if (!function_exists('get_stylesheet_directory')) {
     function get_stylesheet_directory(): string
     {
@@ -1444,6 +1480,46 @@ if (!function_exists('register_block_bindings_source')) {
     function register_block_bindings_source(string $sourceName, array $sourceProperties): void
     {
         wp_stub_record('register_block_bindings_source', compact('sourceName', 'sourceProperties'));
+    }
+}
+
+// ──────────────────────────────────────────────
+// Icons API (WordPress 7.1)
+// ──────────────────────────────────────────────
+
+if (!function_exists('wp_register_icon_collection')) {
+    /**
+     * @param array<string, string> $args
+     */
+    function wp_register_icon_collection(string $slug, array $args): bool
+    {
+        wp_stub_record('wp_register_icon_collection', compact('slug', 'args'));
+
+        return true;
+    }
+}
+
+if (!function_exists('wp_register_icon')) {
+    /**
+     * @param array<string, string> $args
+     */
+    function wp_register_icon(string $icon_name, array $args): bool
+    {
+        wp_stub_record('wp_register_icon', compact('icon_name', 'args'));
+
+        return true;
+    }
+}
+
+if (!function_exists('wp_get_icon')) {
+    /**
+     * @param array<string, mixed> $args
+     */
+    function wp_get_icon(string $name, array $args = []): string
+    {
+        wp_stub_record('wp_get_icon', compact('name', 'args'));
+
+        return $GLOBALS['wp_stub_icons'][$name] ?? '';
     }
 }
 
@@ -1852,6 +1928,21 @@ if (!function_exists('wp_get_attachment_url')) {
         wp_stub_record('wp_get_attachment_url', compact('attachmentId'));
 
         return $GLOBALS['wp_stub_attachments'][$attachmentId]['url'] ?? false;
+    }
+}
+
+if (!function_exists('wp_get_original_image_url')) {
+    /**
+     * WordPress answers with the attachment URL when no `original_image` is
+     * recorded, and so does the stub without an `original` entry.
+     */
+    function wp_get_original_image_url(int $attachmentId): string|false
+    {
+        wp_stub_record('wp_get_original_image_url', compact('attachmentId'));
+
+        $attachment = $GLOBALS['wp_stub_attachments'][$attachmentId] ?? [];
+
+        return $attachment['original'] ?? $attachment['url'] ?? false;
     }
 }
 

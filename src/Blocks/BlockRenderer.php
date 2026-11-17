@@ -50,7 +50,10 @@ final class BlockRenderer
                 $content = EditorCanvas::INNER_BLOCKS;
             }
 
-            return $block->render($attributes, $content, $wpBlock);
+            $html = $block->render($attributes, $content, $wpBlock);
+
+            // On the canvas the editor puts the same attributes on the root with useBlockProps.
+            return $canvas ? $html : BlockSupports::merge($html);
         });
     }
 
