@@ -45,7 +45,17 @@ function wp_stub_reset(): void
     $GLOBALS['wp_stub_terms'] = [];
     $GLOBALS['wp_stub_query_posts'] = [];
     unset($GLOBALS['wp_stub_get_posts'], $GLOBALS['wp_stub_insert_post'], $GLOBALS['wp_stub_home_url']);
-    if (!function_exists('wp_get_environment_type')) {
+    if (!function_exists('wp_get_additional_image_sizes')) {
+    /**
+     * @return array<string, array<string, mixed>>
+     */
+    function wp_get_additional_image_sizes(): array
+    {
+        return $GLOBALS['_wp_additional_image_sizes'] ?? [];
+    }
+}
+
+if (!function_exists('wp_get_environment_type')) {
         function wp_get_environment_type(): string
         {
             return $GLOBALS['wp_stub_environment_type'] ?? 'production';
@@ -85,6 +95,13 @@ function wp_stub_reset(): void
         $GLOBALS['wp_stub_remote_bodies'],
         $GLOBALS['wp_stub_num_queries'],
     );
+
+    // Rank Math, as tests/rank-math-stubs.php answers for it: no module on, no breadcrumbs.
+    $GLOBALS['rank_math_stub_modules'] = [];
+    $GLOBALS['rank_math_stub_settings'] = [];
+    $GLOBALS['rank_math_stub_crumbs'] = null;
+    $GLOBALS['rank_math_stub_loaded'] = null;
+    $GLOBALS['wp_stub_current_time'] = '2026-11-16 10:00:00';
 
     // The admin controls read all four. A referer left behind would make a redirect land
     // somewhere a later test never set up, and a leaked screen, queried object or global
@@ -365,6 +382,65 @@ if (!class_exists('WP_User')) {
     }
 }
 
+if (!class_exists('WP_Customize_Manager')) {
+    /**
+     * Records the sections, settings and controls added to it.
+     */
+    class WP_Customize_Manager
+    {
+        /** @var array<string, array<string, mixed>> */
+        public array $sections = [];
+
+        /** @var array<string, array<string, mixed>> */
+        public array $settings = [];
+
+        /** @var array<string, array<string, mixed>> */
+        public array $controls = [];
+
+        /**
+         * @param list<string> $sections Ids of the sections that already exist
+         */
+        public function __construct(array $sections = [])
+        {
+            foreach ($sections as $id) {
+                $this->sections[$id] = ['core' => true];
+            }
+        }
+
+        /**
+         * @param array<string, mixed> $args
+         */
+        public function add_section(string $id, array $args = []): void
+        {
+            $this->sections[$id] = $args;
+        }
+
+        /**
+         * @return array<string, mixed>|null
+         */
+        public function get_section(string $id): ?array
+        {
+            return $this->sections[$id] ?? null;
+        }
+
+        /**
+         * @param array<string, mixed> $args
+         */
+        public function add_setting(string $id, array $args = []): void
+        {
+            $this->settings[$id] = $args;
+        }
+
+        /**
+         * @param array<string, mixed> $args
+         */
+        public function add_control(string $id, array $args = []): void
+        {
+            $this->controls[$id] = $args;
+        }
+    }
+}
+
 if (!class_exists('WP_REST_Request')) {
     class WP_REST_Request
     {
@@ -491,6 +567,16 @@ if (!class_exists('wpdb')) {
             $this->queries[] = $query;
 
             return 0;
+        }
+
+        /** The column the next `get_col()` returns, set by a test. */
+        public array $column = [];
+
+        public function get_col(string $query): array
+        {
+            $this->queries[] = $query;
+
+            return $this->column;
         }
 
         public function esc_like(string $text): string
@@ -1432,10 +1518,53 @@ if (!function_exists('settings_fields')) {
     }
 }
 
+if (!function_exists('add_settings_section')) {
+    /**
+     * @param array<string, mixed> $args
+     */
+    function add_settings_section(string $id, string $title, ?callable $callback, string $page, array $args = []): void
+    {
+        wp_stub_record('add_settings_section', compact('id', 'title', 'callback', 'page', 'args'));
+    }
+}
+
+if (!function_exists('add_settings_field')) {
+    /**
+     * @param array<string, mixed> $args
+     */
+    function add_settings_field(
+        string $id,
+        string $title,
+        callable $callback,
+        string $page,
+        string $section = 'default',
+        array $args = [],
+    ): void {
+        wp_stub_record('add_settings_field', compact('id', 'title', 'callback', 'page', 'section', 'args'));
+    }
+}
+
 if (!function_exists('do_settings_sections')) {
+    /**
+     * Print the fields added to the page as rows, as WordPress does.
+     */
     function do_settings_sections(string $page): void
     {
         wp_stub_record('do_settings_sections', compact('page'));
+
+        echo '<table class="form-table" role="presentation">';
+
+        foreach (wp_stub_get_calls('add_settings_field') as $call) {
+            if ($call['args']['page'] !== $page) {
+                continue;
+            }
+
+            echo '<tr><th scope="row">' . $call['args']['title'] . '</th><td>';
+            $call['args']['callback']();
+            echo '</td></tr>';
+        }
+
+        echo '</table>';
     }
 }
 
@@ -1532,6 +1661,26 @@ if (!function_exists('get_bloginfo')) {
             'version' => '6.0',
             default => '',
         };
+    }
+}
+
+if (!function_exists('current_time')) {
+    function current_time(string $type, bool $gmt = false): string|int
+    {
+        return $GLOBALS['wp_stub_current_time'] ?? '2026-11-16 10:00:00';
+    }
+}
+
+if (!function_exists('maybe_unserialize')) {
+    function maybe_unserialize(mixed $data): mixed
+    {
+        if (!is_string($data)) {
+            return $data;
+        }
+
+        $value = @unserialize(trim($data), ['allowed_classes' => false]);
+
+        return $value === false && $data !== 'b:0;' ? $data : $value;
     }
 }
 

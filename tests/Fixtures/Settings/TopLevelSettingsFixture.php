@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Tests\Fixtures\Settings;
 
 use Studiometa\Foehn\Attributes\AsSettingsPage;
-use Studiometa\Foehn\Contracts\SettingsPageInterface;
+use Studiometa\Foehn\Contracts\SettingsInterface;
 use Studiometa\Foehn\Settings\Setting;
 
 #[AsSettingsPage(
@@ -16,9 +16,8 @@ use Studiometa\Foehn\Settings\Setting;
     capability: 'edit_posts',
     icon: 'dashicons-cart',
     position: 58,
-    template: 'settings/shop',
 )]
-final class TopLevelSettingsFixture implements SettingsPageInterface
+final class TopLevelSettingsFixture implements SettingsInterface
 {
     /**
      * @return array<string, Setting>

@@ -116,7 +116,7 @@ final readonly class RelatedProjectsProvider implements ContextProviderInterface
 }
 ```
 
-- The patterns match the template name passed to `render()` or `renderFirst()`, not the WordPress hierarchy name. In the starter layout that is `pages/single`, `pages/archive`, `sections/posts`, `blocks/hero`, `settings/theme-settings`. `*` matches any characters, `/` included, so `'*'` runs for every render, blocks and sections too.
+- The patterns match the template name passed to `render()` or `renderFirst()`, not the WordPress hierarchy name. In the starter layout that is `pages/single`, `pages/archive`, `sections/posts`, `blocks/hero`. `*` matches any characters, `/` included, so `'*'` runs for every render, blocks and sections too.
 - A provider for `'single'` does not run when the controller renders `pages/single`. This is the most common reason a provider "does nothing".
 - `wp foehn inspect templates views --format=json` gives the controller of each WordPress template with a URL that renders it (`url`, or `noUrl` with the reason), and each Twig file with the providers that match it. Both give the context keys known without rendering, once per controller or provider; `views.everyView` lists the providers on `*`, which match every view. When two controllers claim the same template, the lowest `priority` wins.
 - Use a context provider for data many templates share. Use a controller for data one page owns, and to choose the template.
@@ -184,6 +184,7 @@ This renders `templates/sections/posts.twig` inside `<div id="foehn-section-post
 | `wp_block_start`, `wp_block_end`, `wp_block`                                                                                                            | `BlockMarkupExtension`    | Block comment markup in patterns                                                 |
 | `query_get`, `query_has`, `query_contains`, `query_all`, `query_url`, `query_url_without`, `query_url_toggle`, `query_url_clear`, `query_hidden_inputs` | `QueryExtension`          | Filter UIs from the URL query                                                    |
 | `facet(taxonomy)`                                                                                                                                       | `FacetExtension`          | Filter options for a taxonomy (a list of `FacetOption`)                          |
+| `breadcrumbs()`                                                                                                                                         | `BreadcrumbsExtension`    | Breadcrumb trail as `{label, url}` items, from Rank Math. Empty when it is off   |
 | `video_embed`, `video_id`, `video_platform`, `video_is_supported` (functions and filters)                                                               | `VideoEmbedExtension`     | YouTube and Vimeo embed URLs                                                     |
 
 Timber's own functions stay available: `function('wp_head')`, `post.thumbnail.src('large')`, `post.terms('category')`, and so on.
